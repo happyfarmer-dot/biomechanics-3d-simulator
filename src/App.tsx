@@ -1,3 +1,4 @@
+import { ErrorBoundary } from './components/ErrorBoundary';
 import { SceneCanvas } from './components/scene/SceneCanvas';
 import { InspectorPanel } from './components/ui/InspectorPanel';
 import { LayerToolbar } from './components/ui/LayerToolbar';
@@ -10,7 +11,9 @@ export function App() {
       <TopBar />
       <div className="relative flex flex-1 overflow-hidden">
         <main className="relative flex-1 overflow-hidden">
-          <SceneCanvas />
+          <ErrorBoundary>
+            <SceneCanvas />
+          </ErrorBoundary>
           <LayerToolbar />
           <MacroHUD />
         </main>

@@ -198,7 +198,7 @@ describe('Muscle Evaluator', () => {
   it('caches neutral rest length L0 (strain = 0) and detects elongation strain under flexion', () => {
     const neutralKin = computeKinematics(createNeutralPose(), DEFAULT_HEIGHT_M);
     const neutralMuscles = evaluateMuscles(neutralKin, DEFAULT_HEIGHT_M);
-    expect(neutralMuscles.length).toBe(20);
+    expect(neutralMuscles.length).toBe(46);
     for (const m of neutralMuscles) {
       expect(m.strain).toBeCloseTo(0, 6);
       expect(m.status).toBe('normal');

@@ -113,6 +113,7 @@ export const useSimStore = create<SimState>((set, get) => ({
     skeleton: true,
     muscles: true,
     macroLigaments: true,
+    jointCapsule: true,
     spatialComponents: true,
     axesDebug: false,
   },

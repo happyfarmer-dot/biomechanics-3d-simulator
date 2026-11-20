@@ -48,6 +48,8 @@ export interface JointConfig {
   massRatio: number;
   comRatio: number;
   boneRadius: number;
+  /** Optional external .glb anatomical model URL to override procedural mesh */
+  glbUrl?: string;
   romLimits: {
     flexion: [number, number];
     abduction: [number, number];
@@ -184,6 +186,7 @@ export interface LayerVisibility {
   skeleton: boolean;
   muscles: boolean;
   macroLigaments: boolean;
+  jointCapsule: boolean;
   spatialComponents: boolean;
   axesDebug: boolean;
 }

@@ -22,8 +22,9 @@ const LAYER_ITEMS: Array<{
 }> = [
   { key: 'skin', label: '半透明外皮輪廓', icon: User },
   { key: 'skeleton', label: '骨骼系統', icon: Bone },
-  { key: 'muscles', label: '肌束線段', icon: Zap },
+  { key: 'muscles', label: '立體肌群紋理', icon: Zap },
   { key: 'macroLigaments', label: '局部韌帶 LOD', icon: GitBranch },
+  { key: 'jointCapsule', label: '關節囊包膜', icon: Layers },
   { key: 'spatialComponents', label: '空間分力向量', icon: ArrowUpRight },
   { key: 'axesDebug', label: '關節座標軸 Debug', icon: Compass },
 ];

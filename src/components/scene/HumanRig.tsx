@@ -1,11 +1,22 @@
+import { useGLTF } from '@react-three/drei';
 import { useFrame } from '@react-three/fiber';
-import { useMemo, useRef } from 'react';
+import { Suspense, useMemo, useRef } from 'react';
 import { Mesh, Quaternion, Vector3 } from 'three';
 import { JOINT_ORDER, SKELETON_CONFIG } from '../../data/skeletonConfig';
 import { useSimStore } from '../../store/useSimStore';
 import type { JointId, RiskSeverity } from '../../types/biomechanics';
+import {
+  createBoneMaterial,
+  createCartilageMaterial,
+  createJointCapsuleMaterial,
+} from '../../utils/anatomyTextures';
 
 const UP_VEC = new Vector3(0, 1, 0);
+
+function GlbBoneOverride({ url }: { url: string }) {
+  const { scene } = useGLTF(url);
+  return <primitive object={scene.clone()} />;
+}
 
 function PulsingRiskHalo({ severity }: { severity: RiskSeverity }) {
   const meshRef = useRef<Mesh>(null);
@@ -20,7 +31,7 @@ function PulsingRiskHalo({ severity }: { severity: RiskSeverity }) {
   if (severity === 'normal') return null;
 
   const color = severity === 'critical' ? '#ef4444' : '#f59e0b';
-  const opacity = severity === 'critical' ? 0.45 : 0.3;
+  const opacity = severity === 'critical' ? 0.42 : 0.28;
 
   return (
     <mesh ref={meshRef}>
@@ -30,11 +41,266 @@ function PulsingRiskHalo({ severity }: { severity: RiskSeverity }) {
   );
 }
 
+function SpineStack({
+  count,
+  length,
+  radius,
+  boneMat,
+  discMat,
+}: {
+  count: number;
+  length: number;
+  radius: number;
+  boneMat: ReturnType<typeof createBoneMaterial>;
+  discMat: ReturnType<typeof createCartilageMaterial>;
+}) {
+  const step = length / count;
+  return (
+    <group>
+      {Array.from({ length: count }).map((_, i) => {
+        const y = -length / 2 + step * (i + 0.5);
+        return (
+          <group key={i} position={[0, y, 0]}>
+            {/* Vertebral body */}
+            <mesh material={boneMat} castShadow>
+              <cylinderGeometry args={[radius * 0.52, radius * 0.56, step * 0.68, 12]} />
+            </mesh>
+            {/* Posterior spinous process */}
+            <mesh position={[0, -step * 0.05, -radius * 0.65]} rotation={[0.35, 0, 0]} material={boneMat}>
+              <boxGeometry args={[radius * 0.18, step * 0.42, radius * 0.6]} />
+            </mesh>
+            {/* Intervertebral disc */}
+            {i < count - 1 && (
+              <mesh position={[0, step * 0.48, 0]} material={discMat}>
+                <cylinderGeometry args={[radius * 0.5, radius * 0.5, step * 0.24, 12]} />
+              </mesh>
+            )}
+          </group>
+        );
+      })}
+    </group>
+  );
+}
+
+function AnatomicalBoneMesh({
+  jointId,
+  length,
+  radius,
+  scale,
+  isGhosted,
+}: {
+  jointId: JointId;
+  length: number;
+  radius: number;
+  scale: number;
+  isGhosted: boolean;
+}) {
+  const boneMat = useMemo(() => createBoneMaterial(isGhosted), [isGhosted]);
+  const cartMat = useMemo(() => createCartilageMaterial(isGhosted), [isGhosted]);
+
+  // 1. Skull & Mandible
+  if (jointId === 'head') {
+    return (
+      <group>
+        {/* Cranium */}
+        <mesh position={[0, length * 0.12, -0.01 * scale]} scale={[0.92, 1.1, 1.05]} material={boneMat} castShadow={!isGhosted}>
+          <sphereGeometry args={[radius * 1.12, 24, 24]} />
+        </mesh>
+        {/* Jaw / Mandible */}
+        <mesh position={[0, -length * 0.28, 0.032 * scale]} material={boneMat} castShadow={!isGhosted}>
+          <boxGeometry args={[radius * 0.92, length * 0.42, radius * 0.88]} />
+        </mesh>
+      </group>
+    );
+  }
+
+  // 2. Cervical Spine (7 vertebrae)
+  if (jointId === 'neck') {
+    return <SpineStack count={7} length={length} radius={radius} boneMat={boneMat} discMat={cartMat} />;
+  }
+
+  // 3. Lumbar Spine (5 vertebrae)
+  if (jointId === 'lumbar') {
+    return <SpineStack count={5} length={length} radius={radius * 0.85} boneMat={boneMat} discMat={cartMat} />;
+  }
+
+  // 4. Thorax: 12 Thoracic Vertebrae + Ribcage + Sternum + Acromion/Glenoid
+  if (jointId === 'thorax') {
+    const ribPairs = 7;
+    return (
+      <group>
+        <group position={[0, 0, -0.055 * scale]}>
+          <SpineStack count={12} length={length} radius={radius * 0.42} boneMat={boneMat} discMat={cartMat} />
+        </group>
+        {/* Sternum */}
+        <mesh position={[0, 0.02 * scale, 0.075 * scale]} rotation={[-0.12, 0, 0]} material={boneMat} castShadow={!isGhosted}>
+          <boxGeometry args={[0.028 * scale, length * 0.68, 0.012 * scale]} />
+        </mesh>
+        {/* Curved Bilateral Ribs */}
+        {Array.from({ length: ribPairs }).map((_, i) => {
+          const t = i / (ribPairs - 1);
+          const y = length * (0.36 - t * 0.68);
+          const rx = (0.088 + Math.sin(t * Math.PI) * 0.042) * scale;
+          const rz = (0.068 + Math.sin(t * Math.PI) * 0.016) * scale;
+          return (
+            <mesh
+              key={i}
+              position={[0, y, 0.008 * scale]}
+              rotation={[Math.PI / 2 + 0.12, 0, 0]}
+              scale={[rx, rz, 1]}
+              material={boneMat}
+            >
+              <torusGeometry args={[1, 0.0055 / Math.max(rx, 0.01), 8, 28]} />
+            </mesh>
+          );
+        })}
+        {/* Bilateral Clavicles & Acromion Arch */}
+        {([-1, 1] as const).map((s) => (
+          <group key={s}>
+            <mesh
+              position={[s * 0.095 * scale, length * 0.34, 0.045 * scale]}
+              rotation={[0, s * 0.25, s * 1.48]}
+              material={boneMat}
+            >
+              <capsuleGeometry args={[0.008 * scale, 0.14 * scale, 6, 10]} />
+            </mesh>
+            {/* Acromion process */}
+            <mesh position={[s * 0.195 * scale, length * 0.32, 0]} material={boneMat}>
+              <boxGeometry args={[0.032 * scale, 0.012 * scale, 0.036 * scale]} />
+            </mesh>
+            {/* Glenoid cartilage socket */}
+            <mesh position={[s * 0.198 * scale, length * 0.22, 0]} rotation={[0, 0, Math.PI / 2]} material={cartMat}>
+              <cylinderGeometry args={[0.024 * scale, 0.024 * scale, 0.01 * scale, 14]} />
+            </mesh>
+          </group>
+        ))}
+      </group>
+    );
+  }
+
+  // 5. Pelvis: Sacrum + Left/Right Iliac Wings + Pubic Symphysis
+  if (jointId === 'pelvis') {
+    return (
+      <group>
+        {/* Sacrum */}
+        <mesh position={[0, 0, -0.045 * scale]} material={boneMat} castShadow={!isGhosted}>
+          <cylinderGeometry args={[0.045 * scale, 0.025 * scale, length * 0.85, 10]} />
+        </mesh>
+        {/* Iliac Wings */}
+        {([-1, 1] as const).map((s) => (
+          <group key={s}>
+            <mesh
+              position={[s * 0.088 * scale, 0.015 * scale, -0.01 * scale]}
+              rotation={[0.2, s * 0.35, s * -0.42]}
+              material={boneMat}
+              castShadow={!isGhosted}
+            >
+              <boxGeometry args={[0.085 * scale, length * 0.95, 0.022 * scale]} />
+            </mesh>
+            {/* Acetabular cartilage socket */}
+            <mesh position={[s * 0.092 * scale, -length * 0.35, 0]} material={cartMat}>
+              <sphereGeometry args={[0.028 * scale, 14, 14]} />
+            </mesh>
+          </group>
+        ))}
+        {/* Pubic Arch */}
+        <mesh position={[0, -length * 0.38, 0.048 * scale]} rotation={[0, 0, Math.PI / 2]} material={boneMat}>
+          <capsuleGeometry args={[0.012 * scale, 0.11 * scale, 6, 10]} />
+        </mesh>
+      </group>
+    );
+  }
+
+  // 6. Forearm (Ulna + Radius) & Lower Leg (Tibia + Fibula)
+  const isForearm = jointId.startsWith('elbow_');
+  const isShank = jointId.startsWith('knee_');
+  const isSideL = jointId.endsWith('_L');
+  const latSign = isSideL ? 1 : -1;
+
+  if (isForearm || isShank) {
+    const condyleSpread = radius * 0.82;
+    return (
+      <group>
+        {/* Main bone (Ulna / Tibia) */}
+        <mesh position={[-latSign * radius * 0.25, 0, 0]} material={boneMat} castShadow={!isGhosted}>
+          <cylinderGeometry args={[radius * 0.56, radius * 0.48, length * 0.88, 12]} />
+        </mesh>
+        {/* Companion bone (Radius / Fibula) */}
+        <mesh position={[latSign * radius * 0.42, 0, -radius * 0.1]} material={boneMat} castShadow={!isGhosted}>
+          <cylinderGeometry args={[radius * 0.36, radius * 0.34, length * 0.86, 10]} />
+        </mesh>
+        {/* Proximal Condyles / Plateau */}
+        {([-1, 1] as const).map((s) => (
+          <mesh key={`p_${s}`} position={[s * condyleSpread * 0.65, length * 0.45, 0]} material={boneMat}>
+            <sphereGeometry args={[radius * 0.66, 12, 12]} />
+          </mesh>
+        ))}
+        {/* Proximal Articular Cartilage */}
+        <mesh position={[0, length * 0.48, 0]} material={cartMat}>
+          <cylinderGeometry args={[radius * 1.15, radius * 1.15, 0.008 * scale, 16]} />
+        </mesh>
+        {/* Distal Condyles / Malleoli */}
+        {([-1, 1] as const).map((s) => (
+          <mesh key={`d_${s}`} position={[s * condyleSpread * 0.55, -length * 0.45, 0]} material={boneMat}>
+            <sphereGeometry args={[radius * 0.54, 12, 12]} />
+          </mesh>
+        ))}
+        {/* Olecranon process for elbow */}
+        {isForearm && (
+          <mesh position={[0, length * 0.47, -radius * 0.65]} material={boneMat}>
+            <sphereGeometry args={[radius * 0.55, 10, 10]} />
+          </mesh>
+        )}
+      </group>
+    );
+  }
+
+  // 7. Single Long Bones (Humerus / Femur) with Proximal Head & Distal Epicondyles
+  const isUpperArm = jointId.startsWith('shoulder_');
+  const isThigh = jointId.startsWith('hip_');
+  if (isUpperArm || isThigh) {
+    return (
+      <group>
+        {/* Diaphysis shaft */}
+        <mesh material={boneMat} castShadow={!isGhosted}>
+          <cylinderGeometry args={[radius * 0.64, radius * 0.58, length * 0.86, 14]} />
+        </mesh>
+        {/* Proximal Humeral/Femoral Head + Articular Cartilage */}
+        <mesh position={[-latSign * radius * 0.32, length * 0.46, 0]} material={cartMat}>
+          <sphereGeometry args={[radius * 0.92, 16, 16]} />
+        </mesh>
+        {/* Greater Tubercle / Trochanter */}
+        <mesh position={[latSign * radius * 0.52, length * 0.42, 0]} material={boneMat}>
+          <sphereGeometry args={[radius * 0.65, 12, 12]} />
+        </mesh>
+        {/* Distal Medial & Lateral Condyles */}
+        {([-1, 1] as const).map((s) => (
+          <mesh key={s} position={[s * radius * 0.62, -length * 0.45, 0]} material={boneMat}>
+            <sphereGeometry args={[radius * 0.72, 14, 14]} />
+          </mesh>
+        ))}
+        {/* Distal Cartilage surface */}
+        <mesh position={[0, -length * 0.48, 0]} material={cartMat}>
+          <cylinderGeometry args={[radius * 1.1, radius * 1.1, 0.008 * scale, 16]} />
+        </mesh>
+      </group>
+    );
+  }
+
+  // 8. Hands & Feet
+  return (
+    <mesh material={boneMat} castShadow={!isGhosted}>
+      <capsuleGeometry args={[radius * 0.68, Math.max(length * 0.65, 0.015), 8, 12]} />
+    </mesh>
+  );
+}
+
 function BoneSegment({
   jointId,
   start,
   end,
   radius,
+  scale,
   showSkeleton,
   showSkin,
   isGhosted,
@@ -43,6 +309,7 @@ function BoneSegment({
   start: [number, number, number];
   end: [number, number, number];
   radius: number;
+  scale: number;
   showSkeleton: boolean;
   showSkin: boolean;
   isGhosted: boolean;
@@ -61,6 +328,7 @@ function BoneSegment({
     };
   }, [start, end]);
 
+  const glbUrl = SKELETON_CONFIG[jointId].glbUrl;
   const isHead = jointId === 'head';
   const isThorax = jointId === 'thorax';
   const isPelvis = jointId === 'pelvis';
@@ -72,63 +340,24 @@ function BoneSegment({
     ? radius * 1.6
     : radius * 1.95;
 
-  const boneOpacity = isGhosted ? 0.12 : 1;
-  const skinOpacity = isGhosted ? 0.04 : 0.18;
+  const skinOpacity = isGhosted ? 0.04 : 0.16;
 
   return (
     <group position={midpoint} quaternion={quaternion}>
       {showSkeleton && (
-        <>
-          {isHead ? (
-            <mesh castShadow={!isGhosted}>
-              <sphereGeometry args={[radius * 1.15, 24, 24]} />
-              <meshStandardMaterial
-                color="#e8e2d5"
-                roughness={0.45}
-                metalness={0.05}
-                transparent={isGhosted}
-                opacity={boneOpacity}
-                depthWrite={!isGhosted}
-              />
-            </mesh>
-          ) : isThorax ? (
-            <mesh castShadow={!isGhosted}>
-              <cylinderGeometry args={[radius * 1.15, radius * 0.85, length, 18]} />
-              <meshStandardMaterial
-                color="#e8e2d5"
-                roughness={0.45}
-                metalness={0.05}
-                transparent={isGhosted}
-                opacity={boneOpacity}
-                depthWrite={!isGhosted}
-              />
-            </mesh>
-          ) : isPelvis ? (
-            <mesh castShadow={!isGhosted}>
-              <cylinderGeometry args={[radius * 1.05, radius * 1.2, length, 16]} />
-              <meshStandardMaterial
-                color="#e8e2d5"
-                roughness={0.45}
-                metalness={0.05}
-                transparent={isGhosted}
-                opacity={boneOpacity}
-                depthWrite={!isGhosted}
-              />
-            </mesh>
-          ) : (
-            <mesh castShadow={!isGhosted}>
-              <cylinderGeometry args={[radius * 0.85, radius * 0.72, length, 14]} />
-              <meshStandardMaterial
-                color="#e8e2d5"
-                roughness={0.42}
-                metalness={0.05}
-                transparent={isGhosted}
-                opacity={boneOpacity}
-                depthWrite={!isGhosted}
-              />
-            </mesh>
-          )}
-        </>
+        glbUrl ? (
+          <Suspense fallback={null}>
+            <GlbBoneOverride url={glbUrl} />
+          </Suspense>
+        ) : (
+          <AnatomicalBoneMesh
+            jointId={jointId}
+            length={length}
+            radius={radius}
+            scale={scale}
+            isGhosted={isGhosted}
+          />
+        )
       )}
 
       {showSkin && (
@@ -151,6 +380,76 @@ function BoneSegment({
   );
 }
 
+/**
+ * Visible internal joint structures (Patella + Patellar Tendon, Menisci, Joint Capsule)
+ */
+function JointInternalStructures({
+  jointId,
+  scale,
+  showCapsule,
+  isGhosted,
+}: {
+  jointId: JointId;
+  scale: number;
+  showCapsule: boolean;
+  isGhosted: boolean;
+}) {
+  const boneMat = useMemo(() => createBoneMaterial(isGhosted), [isGhosted]);
+  const cartMat = useMemo(() => createCartilageMaterial(isGhosted), [isGhosted]);
+  const capsuleMat = useMemo(() => createJointCapsuleMaterial(), []);
+
+  const isKnee = jointId.startsWith('knee_');
+  const isMajorJoint =
+    isKnee ||
+    jointId.startsWith('shoulder_') ||
+    jointId.startsWith('elbow_') ||
+    jointId.startsWith('ankle_') ||
+    jointId.startsWith('hip_');
+
+  if (!isMajorJoint) return null;
+
+  const capsuleRadius =
+    jointId.startsWith('hip_') || jointId.startsWith('shoulder_')
+      ? 0.048 * scale
+      : isKnee
+      ? 0.046 * scale
+      : 0.032 * scale;
+
+  return (
+    <group>
+      {/* Patella & Patellar Tendon for Knee */}
+      {isKnee && (
+        <group>
+          <mesh position={[0, 0.008 * scale, 0.038 * scale]} scale={[1, 1.15, 0.55]} material={boneMat}>
+            <sphereGeometry args={[0.018 * scale, 16, 16]} />
+          </mesh>
+          <mesh position={[0, -0.026 * scale, 0.035 * scale]} rotation={[0.1, 0, 0]} material={cartMat}>
+            <capsuleGeometry args={[0.0055 * scale, 0.045 * scale, 6, 10]} />
+          </mesh>
+          {/* Baseline Menisci pads */}
+          {([-1, 1] as const).map((s) => (
+            <mesh
+              key={s}
+              position={[s * 0.017 * scale, -0.002 * scale, 0]}
+              rotation={[Math.PI / 2, 0, 0]}
+              material={cartMat}
+            >
+              <torusGeometry args={[0.013 * scale, 0.004 * scale, 8, 16, Math.PI * 1.25]} />
+            </mesh>
+          ))}
+        </group>
+      )}
+
+      {/* Translucent Joint Capsule */}
+      {showCapsule && !isGhosted && (
+        <mesh material={capsuleMat}>
+          <sphereGeometry args={[capsuleRadius, 20, 20]} />
+        </mesh>
+      )}
+    </group>
+  );
+}
+
 export function HumanRig() {
   const kinematics = useSimStore((s) => s.kinematics);
   const selectedJoint = useSimStore((s) => s.selectedJoint);
@@ -163,7 +462,6 @@ export function HumanRig() {
 
   const scale = heightM / 1.75;
 
-  // Adjacent joints remain visible during macro focus; all others fade to 0.12
   const activeMacroSet = useMemo(() => {
     if (!focusedJointId) return null;
     const set = new Set<JointId>([focusedJointId]);
@@ -186,7 +484,6 @@ export function HumanRig() {
         const isFocused = focusedJointId === id;
         const risk = jointRiskMap[id];
 
-        // Segment belongs to id: visible if id === focusedJointId or id === focusedParent
         const isSegmentVisible =
           !activeMacroSet ||
           id === focusedJointId ||
@@ -200,6 +497,7 @@ export function HumanRig() {
               start={j.worldPosition}
               end={j.distalWorldPosition}
               radius={cfg.boneRadius * scale}
+              scale={scale}
               showSkeleton={layers.skeleton}
               showSkin={layers.skin}
               isGhosted={!isSegmentVisible}
@@ -207,41 +505,51 @@ export function HumanRig() {
 
             <group position={j.worldPosition} quaternion={j.worldQuaternion}>
               {layers.skeleton && (
-                <mesh
-                  onClick={(e) => {
-                    e.stopPropagation();
-                    setSelectedJoint(id);
-                  }}
-                  onDoubleClick={(e) => {
-                    e.stopPropagation();
-                    setFocusedJoint(id);
-                  }}
-                >
-                  <sphereGeometry args={[cfg.boneRadius * scale * 0.95 + 0.008, 16, 16]} />
-                  <meshStandardMaterial
-                    color={
-                      isSelected
-                        ? '#38bdf8'
-                        : risk === 'critical'
-                        ? '#ef4444'
-                        : risk === 'warning'
-                        ? '#f59e0b'
-                        : '#cbd5e1'
-                    }
-                    emissive={
-                      isSelected
-                        ? '#0284c7'
-                        : risk === 'critical'
-                        ? '#991b1b'
-                        : '#000000'
-                    }
-                    emissiveIntensity={isSelected || risk === 'critical' ? 0.8 : 0}
-                    roughness={0.3}
-                    transparent={!isJointVisible || isFocused}
-                    opacity={!isJointVisible ? 0.12 : isFocused ? 0.28 : 1}
-                    depthWrite={isJointVisible && !isFocused}
+                <>
+                  {/* Clickable Joint Core */}
+                  <mesh
+                    onClick={(e) => {
+                      e.stopPropagation();
+                      setSelectedJoint(id);
+                    }}
+                    onDoubleClick={(e) => {
+                      e.stopPropagation();
+                      setFocusedJoint(id);
+                    }}
+                  >
+                    <sphereGeometry args={[cfg.boneRadius * scale * 0.72 + 0.006, 16, 16]} />
+                    <meshStandardMaterial
+                      color={
+                        isSelected
+                          ? '#38bdf8'
+                          : risk === 'critical'
+                          ? '#ef4444'
+                          : risk === 'warning'
+                          ? '#f59e0b'
+                          : '#dbeafe'
+                      }
+                      emissive={
+                        isSelected
+                          ? '#0284c7'
+                          : risk === 'critical'
+                          ? '#991b1b'
+                          : '#000000'
+                      }
+                      emissiveIntensity={isSelected || risk === 'critical' ? 0.75 : 0}
+                      roughness={0.22}
+                      transparent
+                      opacity={!isJointVisible ? 0.12 : isFocused ? 0.2 : 0.75}
+                      depthWrite={false}
+                    />
+                  </mesh>
+
+                  <JointInternalStructures
+                    jointId={id}
+                    scale={scale}
+                    showCapsule={layers.jointCapsule}
+                    isGhosted={!isJointVisible}
                   />
-                </mesh>
+                </>
               )}
 
               {isJointVisible && !isFocused && <PulsingRiskHalo severity={risk} />}

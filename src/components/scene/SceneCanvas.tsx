@@ -4,7 +4,7 @@ import { CameraRig } from './CameraRig';
 import { HumanRig } from './HumanRig';
 import { JointGizmo } from './JointGizmo';
 import { JointMacroDetail } from './JointMacroDetail';
-import { MuscleLines } from './MuscleLines';
+import { MuscleMeshes } from './MuscleMeshes';
 import { SpatialForceEditor } from './SpatialForceEditor';
 
 export function SceneCanvas() {
@@ -43,7 +43,7 @@ export function SceneCanvas() {
 
         <HumanRig />
         <JointMacroDetail />
-        <MuscleLines />
+        <MuscleMeshes />
         <SpatialForceEditor />
         <JointGizmo />
 
