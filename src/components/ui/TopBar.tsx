@@ -21,6 +21,7 @@ export function TopBar() {
   const interactionMode = useSimStore((s) => s.interactionMode);
   const setInteractionMode = useSimStore((s) => s.setInteractionMode);
   const alerts = useSimStore((s) => s.alerts);
+  const modelStatus = useSimStore((s) => s.modelStatus);
   const lumbarCompression = useSimStore(
     (s) => s.loads.lumbar?.lumbarEstimatedCompressionN ?? 0
   );
@@ -66,7 +67,7 @@ export function TopBar() {
           onChange={(e) => {
             if (e.target.value) applyPreset(e.target.value);
           }}
-          className="min-w-[120px] max-w-[180px] shrink-0 rounded-lg border border-slate-700 bg-slate-900 px-2 py-1 text-xs text-slate-100 focus:border-sky-500 focus:outline-none cursor-pointer"
+          className="min-w-[110px] max-w-[165px] shrink-0 rounded-lg border border-slate-700 bg-slate-900 px-2 py-1 text-xs text-slate-100 focus:border-sky-500 focus:outline-none cursor-pointer"
         >
           {!activePresetId && <option value="">自訂姿勢</option>}
           {PRESET_POSES.map((p) => (
@@ -76,8 +77,24 @@ export function TopBar() {
           ))}
         </select>
 
-        {/* 腰椎風險徽章 + 重置 + 免責資訊 */}
+        {/* 模型載入狀態 + 腰椎風險徽章 + 重置 + 免責資訊 */}
         <div className="flex shrink-0 items-center gap-1.5 text-[11px]">
+          <div
+            className={`flex items-center gap-1 rounded-md border px-2 py-0.5 font-medium ${
+              modelStatus.state === 'loaded'
+                ? 'border-emerald-500/50 bg-emerald-950/60 text-emerald-300'
+                : modelStatus.state === 'error'
+                ? 'border-red-500/60 bg-red-950/70 text-red-300'
+                : 'border-slate-700 bg-slate-900 text-slate-400'
+            }`}
+          >
+            {modelStatus.state === 'loaded'
+              ? '真實解剖網格'
+              : modelStatus.state === 'error'
+              ? `未找到解剖模型（原因：${modelStatus.message ?? '載入失敗'}）`
+              : '載入模型中'}
+          </div>
+
           <div
             className={`flex items-center gap-1 rounded-md border px-2 py-0.5 font-mono ${
               criticalCount > 0 || lumbarCompression > 3400

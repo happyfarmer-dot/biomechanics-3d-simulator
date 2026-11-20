@@ -101,13 +101,8 @@ export function SceneCanvas() {
         />
 
         <GlbAnatomyLoader onExternalActive={setExternalGlbActive} />
-
-        {!externalGlbActive && (
-          <>
-            <HumanRig />
-            <MuscleMeshes />
-          </>
-        )}
+        <HumanRig hideProceduralBones={externalGlbActive} />
+        {!externalGlbActive && <MuscleMeshes />}
 
         <JointMacroDetail />
         <SpatialForceEditor />

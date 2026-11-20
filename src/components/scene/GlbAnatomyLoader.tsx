@@ -85,15 +85,15 @@ function parseMeshClassification(name: string): {
 }
 
 class GlbSilentBoundary extends Component<
-  { children: ReactNode; onError: () => void },
+  { children: ReactNode; onError: (msg: string) => void },
   { failed: boolean }
 > {
   state = { failed: false };
   static getDerivedStateFromError() {
     return { failed: true };
   }
-  componentDidCatch() {
-    this.props.onError();
+  componentDidCatch(err: Error) {
+    this.props.onError(err.message || '模型解析失敗');
   }
   render() {
     if (this.state.failed) return null;
@@ -114,6 +114,7 @@ function RealAnatomyModel({
   const layers = useSimStore((s) => s.layers);
   const focusedJointId = useSimStore((s) => s.focusedJointId);
   const jointRiskMap = useSimStore((s) => s.jointRiskMap);
+  const setModelStatus = useSimStore((s) => s.setModelStatus);
 
   const bindings = useMemo<RealAnatomyBinding[]>(() => {
     scene.updateMatrixWorld(true);
@@ -133,7 +134,6 @@ function RealAnatomyModel({
       const { kind, jointId } = parseMeshClassification(obj.name);
       const cloned = obj.clone();
 
-      // Transform mesh world position into normalized standing space (feet at y=0, centered X/Z)
       const worldPos = new Vector3();
       obj.getWorldPosition(worldPos);
       const normX = (worldPos.x - center.x) * modelScale;
@@ -159,9 +159,15 @@ function RealAnatomyModel({
   }, [scene, heightM]);
 
   useEffect(() => {
-    onReady(bindings.length > 0);
+    const ok = bindings.length > 0;
+    onReady(ok);
+    if (ok) {
+      setModelStatus({ state: 'loaded' });
+    } else {
+      setModelStatus({ state: 'error', message: '模型中無有效網格' });
+    }
     return () => onReady(false);
-  }, [bindings.length, onReady]);
+  }, [bindings.length, onReady, setModelStatus]);
 
   const activeMacroSet = useMemo(() => {
     if (!focusedJointId) return null;
@@ -213,8 +219,8 @@ function RealAnatomyModel({
 }
 
 /**
- * Non-blocking external Z-Anatomy GLB loader for /models/anatomy_rigged.glb.
- * Silently falls back to procedural anatomy if the file is absent.
+ * Non-blocking external Z-Anatomy GLB loader for ./models/anatomy_rigged.glb.
+ * Reports explicit load status to TopBar and falls back to procedural anatomy on error.
  */
 export function GlbAnatomyLoader({
   url = DEFAULT_GLB_URL,
@@ -224,32 +230,49 @@ export function GlbAnatomyLoader({
   onExternalActive?: (active: boolean) => void;
 }) {
   const [available, setAvailable] = useState(false);
+  const setModelStatus = useSimStore((s) => s.setModelStatus);
 
   useEffect(() => {
     let cancelled = false;
+    setModelStatus({ state: 'loading' });
     fetch(url, { method: 'HEAD' })
       .then((res) => {
         if (cancelled) return;
         const ct = res.headers.get('content-type') ?? '';
         const isValidGlb = res.ok && !ct.includes('text/html');
         setAvailable(isValidGlb);
-        if (!isValidGlb) onExternalActive?.(false);
+        if (!isValidGlb) {
+          onExternalActive?.(false);
+          setModelStatus({
+            state: 'error',
+            message: !res.ok ? `HTTP ${res.status}` : '檔案格式非 GLB',
+          });
+        }
       })
-      .catch(() => {
+      .catch((err) => {
         if (!cancelled) {
           setAvailable(false);
           onExternalActive?.(false);
+          setModelStatus({
+            state: 'error',
+            message: err instanceof Error ? err.message : '網路連線失敗',
+          });
         }
       });
     return () => {
       cancelled = true;
     };
-  }, [url, onExternalActive]);
+  }, [url, onExternalActive, setModelStatus]);
 
   if (!available) return null;
 
   return (
-    <GlbSilentBoundary onError={() => onExternalActive?.(false)}>
+    <GlbSilentBoundary
+      onError={(msg) => {
+        onExternalActive?.(false);
+        setModelStatus({ state: 'error', message: msg });
+      }}
+    >
       <Suspense fallback={null}>
         <RealAnatomyModel url={url} onReady={(ok) => onExternalActive?.(ok)} />
       </Suspense>

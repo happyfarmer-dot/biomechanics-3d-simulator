@@ -476,7 +476,7 @@ function JointInternalStructures({
   );
 }
 
-export function HumanRig() {
+export function HumanRig({ hideProceduralBones = false }: { hideProceduralBones?: boolean }) {
   const kinematics = useSimStore((s) => s.kinematics);
   const selectedJoint = useSimStore((s) => s.selectedJoint);
   const focusedJointId = useSimStore((s) => s.focusedJointId);
@@ -524,7 +524,7 @@ export function HumanRig() {
               end={j.distalWorldPosition}
               radius={cfg.boneRadius * scale}
               scale={scale}
-              showSkeleton={layers.skeleton}
+              showSkeleton={!hideProceduralBones && layers.skeleton}
               showSkin={layers.skin}
               isGhosted={!isSegmentVisible}
             />

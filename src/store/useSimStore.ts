@@ -38,6 +38,7 @@ interface SimState {
   layers: LayerVisibility;
   isDraggingGizmo: boolean;
   activePresetId: string | null;
+  modelStatus: { state: 'loading' | 'loaded' | 'error'; message?: string };
 
   // Derived simulation outputs
   kinematics: KinematicsResult;
@@ -48,6 +49,7 @@ interface SimState {
   focusedSoftTissues: SoftTissueLoad[];
 
   // Actions
+  setModelStatus: (status: { state: 'loading' | 'loaded' | 'error'; message?: string }) => void;
   setSelectedJoint: (jointId: JointId | null) => void;
   setFocusedJoint: (jointId: JointId | null) => void;
   setInteractionMode: (mode: InteractionMode) => void;
@@ -119,7 +121,10 @@ export const useSimStore = create<SimState>((set, get) => ({
   },
   isDraggingGizmo: false,
   activePresetId: 'neutral_standing',
+  modelStatus: { state: 'loading' },
   ...initialDerived,
+
+  setModelStatus: (modelStatus) => set({ modelStatus }),
 
   setSelectedJoint: (jointId) => {
     const s = get();
