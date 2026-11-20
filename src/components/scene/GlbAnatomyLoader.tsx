@@ -8,8 +8,9 @@ import {
 } from '../../data/skeletonConfig';
 import { calibrateSkeletonFromScene } from '../../engine/calibrateSkeleton';
 import {
-  prepareSkinnedMuscle,
-  resolveMuscleBonePair,
+  classifyMeshZone,
+  findNearestBoneJointInZone,
+  prepareAutoSkinnedMuscle,
   updateSkinnedMuscleVertices,
   type SkinnedMuscleData,
 } from '../../engine/muscleSkinning';
@@ -25,7 +26,6 @@ const DRACO_PATH = `${import.meta.env.BASE_URL}draco/`;
 useGLTF.setDecoderPath(DRACO_PATH);
 
 const DEFAULT_GLB_URL = `${import.meta.env.BASE_URL}models/anatomy_rigged.glb`;
-const VALID_JOINT_IDS = new Set<string>(JOINT_ORDER);
 
 interface BoneBinding {
   kind: 'bone' | 'skin';
@@ -39,58 +39,6 @@ interface MuscleBinding {
   name: string;
   jointId: JointId;
   skinned: SkinnedMuscleData;
-}
-
-function parseMeshClassification(name: string): {
-  kind: 'bone' | 'muscle' | 'skin';
-  jointId: JointId;
-} {
-  const parts = name.split('__');
-  if (parts.length >= 2) {
-    const prefix = parts[0].toUpperCase();
-    const candidateJoint = parts[1];
-    if (VALID_JOINT_IDS.has(candidateJoint)) {
-      if (prefix === 'BONE') return { kind: 'bone', jointId: candidateJoint as JointId };
-      if (prefix === 'MUSCLE') return { kind: 'muscle', jointId: candidateJoint as JointId };
-      if (prefix === 'SKIN') return { kind: 'skin', jointId: candidateJoint as JointId };
-    }
-  }
-
-  const lower = name.toLowerCase();
-  const isL = lower.includes('_l') || lower.includes('.l') || lower.includes('left');
-  const isR = lower.includes('_r') || lower.includes('.r') || lower.includes('right');
-  const side = isL ? '_L' : isR ? '_R' : '';
-
-  const kind: 'bone' | 'muscle' | 'skin' = lower.includes('skin')
-    ? 'skin'
-    : lower.includes('muscle')
-    ? 'muscle'
-    : 'bone';
-
-  let jointId: JointId = 'pelvis';
-  if (lower.includes('femur') || lower.includes('quad') || lower.includes('hamstring') || lower.includes('glute')) {
-    jointId = (`hip${side || '_R'}`) as JointId;
-  } else if (lower.includes('tibia') || lower.includes('fibula') || lower.includes('patella') || lower.includes('gastroc') || lower.includes('soleus')) {
-    jointId = (`knee${side || '_R'}`) as JointId;
-  } else if (lower.includes('foot') || lower.includes('talus') || lower.includes('ankle')) {
-    jointId = (`ankle${side || '_R'}`) as JointId;
-  } else if (lower.includes('humerus') || lower.includes('deltoid') || lower.includes('biceps') || lower.includes('triceps')) {
-    jointId = (`shoulder${side || '_R'}`) as JointId;
-  } else if (lower.includes('radius') || lower.includes('ulna') || lower.includes('forearm')) {
-    jointId = (`elbow${side || '_R'}`) as JointId;
-  } else if (lower.includes('hand') || lower.includes('wrist')) {
-    jointId = (`wrist${side || '_R'}`) as JointId;
-  } else if (lower.includes('skull') || lower.includes('head') || lower.includes('mandible')) {
-    jointId = 'head';
-  } else if (lower.includes('neck') || lower.includes('cervical')) {
-    jointId = 'neck';
-  } else if (lower.includes('lumbar') || lower.includes('erector')) {
-    jointId = 'lumbar';
-  } else if (lower.includes('thorax') || lower.includes('rib') || lower.includes('sternum') || lower.includes('pectoralis')) {
-    jointId = 'thorax';
-  }
-
-  return { kind, jointId };
 }
 
 class GlbSilentBoundary extends Component<
@@ -136,26 +84,31 @@ function RealAnatomyModel({
     return () => setCalibratedOffsets(null);
   }, [calibration, setCalibratedOffsets]);
 
-  // Step 2: Prepare bone bindings and dual-bone LBS skinned muscles
-  const { boneBindings, muscleBindings } = useMemo(() => {
+  // Step 2: 100% Spatial Partitioning + Per-Vertex Auto-Skinning
+  const { boneBindings, muscleBindings, unassignedMeshCount } = useMemo(() => {
     const bones: BoneBinding[] = [];
     const muscles: MuscleBinding[] = [];
     const [cx, minY, cz] = calibration.centerOffset;
     const s = calibration.modelScale;
+    let unassigned = 0;
 
     scene.traverse((obj) => {
       if (!(obj instanceof Mesh)) return;
-      const { kind, jointId } = parseMeshClassification(obj.name);
+      const nl = obj.name.toLowerCase();
+      const zone = classifyMeshZone(obj, calibration);
 
-      if (kind === 'muscle') {
-        const { originJoint, insertionJoint } = resolveMuscleBonePair(obj.name, jointId);
-        const skinned = prepareSkinnedMuscle(obj, originJoint, insertionJoint, calibration);
+      if (nl.startsWith('muscle__') || nl.includes('muscle')) {
+        const skinned = prepareAutoSkinnedMuscle(obj, zone, calibration);
         muscles.push({
           name: obj.name,
-          jointId,
+          jointId: skinned.primaryJoint,
           skinned,
         });
       } else {
+        const kind: 'bone' | 'skin' = nl.includes('skin') ? 'skin' : 'bone';
+        const jointId = findNearestBoneJointInZone(obj, zone, calibration);
+        if (!jointId) unassigned++;
+
         const cloned = obj.clone();
         cloned.visible = true;
         const worldPos = new Vector3();
@@ -175,10 +128,13 @@ function RealAnatomyModel({
       }
     });
 
-    return { boneBindings: bones, muscleBindings: muscles };
+    return { boneBindings: bones, muscleBindings: muscles, unassignedMeshCount: unassigned };
   }, [scene, calibration]);
 
   useEffect(() => {
+    console.info(
+      `[Z-Anatomy] Loaded ${boneBindings.length} bones, ${muscleBindings.length} auto-skinned muscles, unassignedMeshCount === ${unassignedMeshCount}`
+    );
     const ok = boneBindings.length > 0 || muscleBindings.length > 0;
     onReady(ok);
     if (ok) {
@@ -187,17 +143,19 @@ function RealAnatomyModel({
       setModelStatus({ state: 'error', message: '模型中無有效網格' });
     }
     return () => onReady(false);
-  }, [boneBindings.length, muscleBindings.length, onReady, setModelStatus]);
+  }, [boneBindings.length, muscleBindings.length, unassignedMeshCount, onReady, setModelStatus]);
 
-  // Step 3: Update only muscles whose origin or insertion joint transform changed
+  // Step 3: Update only muscles whose used joints changed
   const prevJointSigRef = useMemo(() => new Map<number, string>(), []);
   const stretchRatios = useMemo(() => {
     const ratios = new Array<number>(muscleBindings.length);
     for (let i = 0; i < muscleBindings.length; i++) {
       const m = muscleBindings[i];
-      const jO = kinematics.joints[m.skinned.originJoint];
-      const jI = kinematics.joints[m.skinned.insertionJoint];
-      const sig = `${jO.worldPosition[0].toFixed(4)},${jO.worldPosition[1].toFixed(4)},${jO.worldQuaternion[0].toFixed(4)},${jO.worldQuaternion[1].toFixed(4)},${jI.worldPosition[0].toFixed(4)},${jI.worldPosition[1].toFixed(4)},${jI.worldQuaternion[0].toFixed(4)},${jI.worldQuaternion[1].toFixed(4)},${heightM}`;
+      let sig = `${heightM}`;
+      for (const jId of m.skinned.usedJoints) {
+        const j = kinematics.joints[jId];
+        sig += `|${j.worldPosition[0].toFixed(4)},${j.worldPosition[1].toFixed(4)},${j.worldQuaternion[0].toFixed(4)},${j.worldQuaternion[1].toFixed(4)},${j.worldQuaternion[2].toFixed(4)}`;
+      }
       if (prevJointSigRef.get(i) !== sig) {
         prevJointSigRef.set(i, sig);
         ratios[i] = updateSkinnedMuscleVertices(m.skinned, kinematics, heightM);
@@ -266,8 +224,7 @@ function RealAnatomyModel({
         muscleBindings.map((m, idx) => {
           const isGhosted = Boolean(
             activeMacroSet &&
-              !activeMacroSet.has(m.skinned.originJoint) &&
-              !activeMacroSet.has(m.skinned.insertionJoint)
+              m.skinned.usedJoints.every((jid) => !activeMacroSet.has(jid))
           );
           const stretch = stretchRatios[idx] ?? 1;
           const jointRisk = jointRiskMap[m.jointId];

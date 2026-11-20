@@ -503,6 +503,17 @@ export function HumanRig({ hideProceduralBones = false }: { hideProceduralBones?
   }, [focusedJointId]);
 
   const showJointDots = interactionMode === 'pose' && !focusedJointId;
+  const MAIN_CONTROL_JOINTS = useMemo(
+    () =>
+      new Set<JointId>([
+        'pelvis', 'lumbar', 'neck',
+        'shoulder_L', 'elbow_L', 'wrist_L',
+        'shoulder_R', 'elbow_R', 'wrist_R',
+        'hip_L', 'knee_L', 'ankle_L',
+        'hip_R', 'knee_R', 'ankle_R',
+      ]),
+    []
+  );
 
   return (
     <group name="human-rig">
@@ -535,43 +546,55 @@ export function HumanRig({ hideProceduralBones = false }: { hideProceduralBones?
             <group position={j.worldPosition} quaternion={j.worldQuaternion}>
               {layers.skeleton && (
                 <>
-                  {/* Refined Clickable Joint Indicator Dot (0.015m) */}
-                  {showJointDots && (
-                    <mesh
-                      onClick={(e) => {
-                        e.stopPropagation();
-                        setSelectedJoint(id);
-                      }}
-                      onDoubleClick={(e) => {
-                        e.stopPropagation();
-                        setFocusedJoint(id);
-                      }}
-                    >
-                      <sphereGeometry args={[(isSelected ? 0.022 : 0.015) * scale, 14, 14]} />
-                      <meshStandardMaterial
-                        color={
-                          isSelected
-                            ? '#38bdf8'
-                            : risk === 'critical'
-                            ? '#ef4444'
-                            : risk === 'warning'
-                            ? '#f59e0b'
-                            : '#94a3b8'
-                        }
-                        emissive={
-                          isSelected
-                            ? '#0284c7'
-                            : risk === 'critical'
-                            ? '#991b1b'
-                            : '#000000'
-                        }
-                        emissiveIntensity={isSelected || risk === 'critical' ? 0.85 : 0}
-                        roughness={0.25}
-                        transparent
-                        opacity={isSelected || risk !== 'normal' ? 0.9 : 0.55}
-                        depthWrite={false}
-                      />
-                    </mesh>
+                  {/* Always-visible Joint Control Sphere (depthTest=false, renderOrder=999) */}
+                  {showJointDots && MAIN_CONTROL_JOINTS.has(id) && (
+                    <group renderOrder={999}>
+                      <mesh
+                        renderOrder={999}
+                        onClick={(e) => {
+                          e.stopPropagation();
+                          setSelectedJoint(id);
+                        }}
+                        onDoubleClick={(e) => {
+                          e.stopPropagation();
+                          setFocusedJoint(id);
+                        }}
+                      >
+                        <sphereGeometry args={[0.022 * scale, 16, 16]} />
+                        <meshBasicMaterial
+                          color={
+                            risk === 'critical'
+                              ? '#ef4444'
+                              : isSelected
+                              ? '#facc15'
+                              : risk === 'warning'
+                              ? '#f59e0b'
+                              : '#22d3ee'
+                          }
+                          transparent
+                          opacity={isSelected || risk !== 'normal' ? 0.92 : 0.78}
+                          depthTest={false}
+                          depthWrite={false}
+                        />
+                      </mesh>
+                      {/* Thin outer ring (white / gold / red) */}
+                      <mesh renderOrder={999}>
+                        <ringGeometry args={[0.025 * scale, 0.031 * scale, 24]} />
+                        <meshBasicMaterial
+                          color={
+                            risk === 'critical'
+                              ? '#ef4444'
+                              : isSelected
+                              ? '#facc15'
+                              : '#ffffff'
+                          }
+                          transparent
+                          opacity={0.9}
+                          depthTest={false}
+                          depthWrite={false}
+                        />
+                      </mesh>
+                    </group>
                   )}
 
                   {(!hideProceduralBones || isFocused) && (

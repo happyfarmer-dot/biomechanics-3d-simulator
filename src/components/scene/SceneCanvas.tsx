@@ -2,7 +2,6 @@ import { Environment, Grid, Lightformer } from '@react-three/drei';
 import { Canvas } from '@react-three/fiber';
 import { useState } from 'react';
 import { CameraRig } from './CameraRig';
-import { DirectLimbIK } from './DirectLimbIK';
 import { GlbAnatomyLoader } from './GlbAnatomyLoader';
 import { HumanRig } from './HumanRig';
 import { JointGizmo } from './JointGizmo';
@@ -109,7 +108,6 @@ export function SceneCanvas() {
 
         <JointMacroDetail />
         <SpatialForceEditor />
-        <DirectLimbIK />
         <JointGizmo />
 
         <CameraRig />
