@@ -480,6 +480,7 @@ export function HumanRig({ hideProceduralBones = false }: { hideProceduralBones?
   const kinematics = useSimStore((s) => s.kinematics);
   const selectedJoint = useSimStore((s) => s.selectedJoint);
   const focusedJointId = useSimStore((s) => s.focusedJointId);
+  const interactionMode = useSimStore((s) => s.interactionMode);
   const setSelectedJoint = useSimStore((s) => s.setSelectedJoint);
   const setFocusedJoint = useSimStore((s) => s.setFocusedJoint);
   const layers = useSimStore((s) => s.layers);
@@ -500,6 +501,8 @@ export function HumanRig({ hideProceduralBones = false }: { hideProceduralBones?
     }
     return set;
   }, [focusedJointId]);
+
+  const showJointDots = interactionMode === 'pose' && !focusedJointId;
 
   return (
     <group name="human-rig">
@@ -532,49 +535,53 @@ export function HumanRig({ hideProceduralBones = false }: { hideProceduralBones?
             <group position={j.worldPosition} quaternion={j.worldQuaternion}>
               {layers.skeleton && (
                 <>
-                  {/* Clickable Joint Core */}
-                  <mesh
-                    onClick={(e) => {
-                      e.stopPropagation();
-                      setSelectedJoint(id);
-                    }}
-                    onDoubleClick={(e) => {
-                      e.stopPropagation();
-                      setFocusedJoint(id);
-                    }}
-                  >
-                    <sphereGeometry args={[cfg.boneRadius * scale * 0.72 + 0.006, 16, 16]} />
-                    <meshStandardMaterial
-                      color={
-                        isSelected
-                          ? '#38bdf8'
-                          : risk === 'critical'
-                          ? '#ef4444'
-                          : risk === 'warning'
-                          ? '#f59e0b'
-                          : '#dbeafe'
-                      }
-                      emissive={
-                        isSelected
-                          ? '#0284c7'
-                          : risk === 'critical'
-                          ? '#991b1b'
-                          : '#000000'
-                      }
-                      emissiveIntensity={isSelected || risk === 'critical' ? 0.75 : 0}
-                      roughness={0.22}
-                      transparent
-                      opacity={!isJointVisible ? 0.12 : isFocused ? 0.2 : 0.75}
-                      depthWrite={false}
-                    />
-                  </mesh>
+                  {/* Refined Clickable Joint Indicator Dot (0.015m) */}
+                  {showJointDots && (
+                    <mesh
+                      onClick={(e) => {
+                        e.stopPropagation();
+                        setSelectedJoint(id);
+                      }}
+                      onDoubleClick={(e) => {
+                        e.stopPropagation();
+                        setFocusedJoint(id);
+                      }}
+                    >
+                      <sphereGeometry args={[(isSelected ? 0.022 : 0.015) * scale, 14, 14]} />
+                      <meshStandardMaterial
+                        color={
+                          isSelected
+                            ? '#38bdf8'
+                            : risk === 'critical'
+                            ? '#ef4444'
+                            : risk === 'warning'
+                            ? '#f59e0b'
+                            : '#94a3b8'
+                        }
+                        emissive={
+                          isSelected
+                            ? '#0284c7'
+                            : risk === 'critical'
+                            ? '#991b1b'
+                            : '#000000'
+                        }
+                        emissiveIntensity={isSelected || risk === 'critical' ? 0.85 : 0}
+                        roughness={0.25}
+                        transparent
+                        opacity={isSelected || risk !== 'normal' ? 0.9 : 0.55}
+                        depthWrite={false}
+                      />
+                    </mesh>
+                  )}
 
-                  <JointInternalStructures
-                    jointId={id}
-                    scale={scale}
-                    showCapsule={layers.jointCapsule}
-                    isGhosted={!isJointVisible}
-                  />
+                  {(!hideProceduralBones || isFocused) && (
+                    <JointInternalStructures
+                      jointId={id}
+                      scale={scale}
+                      showCapsule={layers.jointCapsule}
+                      isGhosted={!isJointVisible}
+                    />
+                  )}
                 </>
               )}
 

@@ -2,6 +2,7 @@ import { Environment, Grid, Lightformer } from '@react-three/drei';
 import { Canvas } from '@react-three/fiber';
 import { useState } from 'react';
 import { CameraRig } from './CameraRig';
+import { DirectLimbIK } from './DirectLimbIK';
 import { GlbAnatomyLoader } from './GlbAnatomyLoader';
 import { HumanRig } from './HumanRig';
 import { JointGizmo } from './JointGizmo';
@@ -75,16 +76,18 @@ export function SceneCanvas() {
           />
         </Environment>
 
-        {/* 三點攝影棚打光：主光 + 冷色輪廓光 + 底部微弱補光 */}
-        <ambientLight intensity={0.32} />
+        {/* 三點攝影棚打光 + 平衡半球光，確保左右半身肌群明暗均勻 */}
+        <ambientLight intensity={0.4} />
+        <hemisphereLight args={['#f8fafc', '#475569', 0.55]} />
         <directionalLight
           position={[3, 5, 4]}
-          intensity={1.4}
+          intensity={1.25}
           color="#fffaf0"
           castShadow
           shadow-mapSize={[1024, 1024]}
         />
-        <directionalLight position={[-3.5, 2.5, -2.5]} intensity={0.65} color="#7dd3fc" />
+        <directionalLight position={[-3.5, 2.5, 3]} intensity={0.75} color="#e2e8f0" />
+        <directionalLight position={[-3.5, 2.5, -2.5]} intensity={0.55} color="#7dd3fc" />
         <directionalLight position={[0, -2.5, 2]} intensity={0.35} color="#cbd5e1" />
 
         <Grid
@@ -106,6 +109,7 @@ export function SceneCanvas() {
 
         <JointMacroDetail />
         <SpatialForceEditor />
+        <DirectLimbIK />
         <JointGizmo />
 
         <CameraRig />

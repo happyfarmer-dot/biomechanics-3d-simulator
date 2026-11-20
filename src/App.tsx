@@ -1,6 +1,8 @@
 import { ErrorBoundary } from './components/ErrorBoundary';
 import { SceneCanvas } from './components/scene/SceneCanvas';
+import { InjuryAlertOverlay } from './components/ui/InjuryAlertOverlay';
 import { InspectorPanel } from './components/ui/InspectorPanel';
+import { JointTouchPad } from './components/ui/JointTouchPad';
 import { LayerToolbar } from './components/ui/LayerToolbar';
 import { MacroHUD } from './components/ui/MacroHUD';
 import { TopBar } from './components/ui/TopBar';
@@ -16,7 +18,9 @@ export function App() {
         <main className="relative flex-1 overflow-hidden">
           <SceneCanvas />
           <LayerToolbar />
+          <InjuryAlertOverlay />
           <MacroHUD />
+          <JointTouchPad />
           <InspectorPanel />
         </main>
       </div>

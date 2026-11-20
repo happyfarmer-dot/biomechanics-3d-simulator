@@ -38,6 +38,8 @@ export function LayerToolbar() {
   const setAnthropometry = useSimStore((s) => s.setAnthropometry);
   const includeGravity = useSimStore((s) => s.includeGravity);
   const setIncludeGravity = useSimStore((s) => s.setIncludeGravity);
+  const useTouchPad = useSimStore((s) => s.useTouchPad);
+  const setUseTouchPad = useSimStore((s) => s.setUseTouchPad);
 
   useEffect(() => {
     if (!expanded) return;
@@ -97,6 +99,16 @@ export function LayerToolbar() {
           </div>
 
           <div className="border-t border-slate-800 pt-2 space-y-2">
+            <label className="flex items-center justify-between text-[11px] text-slate-300 cursor-pointer">
+              <span>指尖雙軸羅盤</span>
+              <input
+                type="checkbox"
+                checked={useTouchPad}
+                onChange={(e) => setUseTouchPad(e.target.checked)}
+                className="h-3.5 w-3.5 accent-sky-500 cursor-pointer"
+              />
+            </label>
+
             <label className="flex items-center justify-between text-[11px] text-slate-300 cursor-pointer">
               <span>計入肢段自重</span>
               <input

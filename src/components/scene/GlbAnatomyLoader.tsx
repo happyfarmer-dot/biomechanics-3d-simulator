@@ -1,8 +1,8 @@
 import { useGLTF } from '@react-three/drei';
 import { Component, Suspense, useEffect, useMemo, useState, type ReactNode } from 'react';
-import { Box3, Mesh, Vector3 } from 'three';
+import { Box3, Mesh, Quaternion, Vector3 } from 'three';
 import { createNeutralPose, JOINT_ORDER, SKELETON_CONFIG } from '../../data/skeletonConfig';
-import { computeKinematics } from '../../engine/kinematics';
+import { computeKinematics, localEulerToQuaternion } from '../../engine/kinematics';
 import { useSimStore } from '../../store/useSimStore';
 import type { JointId, Vec3 } from '../../types/biomechanics';
 import {
@@ -191,6 +191,33 @@ function RealAnatomyModel({
         const isGhosted = Boolean(activeMacroSet && !activeMacroSet.has(b.jointId));
         const risk = jointRiskMap[b.jointId];
 
+        let groupQuat = j.worldQuaternion;
+        if (b.kind === 'muscle') {
+          b.mesh.visible = true;
+          const lower = b.mesh.name.toLowerCase();
+          let distalId: JointId | null = null;
+          if (
+            b.jointId.startsWith('shoulder_') &&
+            (lower.includes('biceps') || lower.includes('triceps'))
+          ) {
+            distalId = (b.jointId === 'shoulder_L' ? 'elbow_L' : 'elbow_R') as JointId;
+          } else if (
+            b.jointId.startsWith('hip_') &&
+            ['rectus_femoris', 'rectus femoris', 'quadriceps', 'hamstring', 'biceps_femoris', 'biceps femoris', 'semitendinosus', 'semimembranosus', 'sartorius', 'gracilis'].some((k) =>
+              lower.includes(k)
+            )
+          ) {
+            distalId = (b.jointId === 'hip_L' ? 'knee_L' : 'knee_R') as JointId;
+          }
+
+          if (distalId) {
+            const distalLocal = localEulerToQuaternion(kinematics.joints[distalId].localEuler);
+            const partial = new Quaternion().slerp(distalLocal, 0.35);
+            const q = new Quaternion(...j.worldQuaternion).multiply(partial);
+            groupQuat = [q.x, q.y, q.z, q.w];
+          }
+        }
+
         const material =
           b.kind === 'skin'
             ? getSkinFresnelMaterial(isGhosted)
@@ -202,7 +229,7 @@ function RealAnatomyModel({
           <group
             key={`${b.mesh.name}_${idx}`}
             position={j.worldPosition}
-            quaternion={j.worldQuaternion}
+            quaternion={groupQuat}
           >
             <primitive
               object={b.mesh}

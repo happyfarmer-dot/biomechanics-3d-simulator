@@ -8,6 +8,7 @@ import { useSimStore } from '../../store/useSimStore';
 export function JointGizmo() {
   const selectedJoint = useSimStore((s) => s.selectedJoint);
   const interactionMode = useSimStore((s) => s.interactionMode);
+  const useTouchPad = useSimStore((s) => s.useTouchPad);
   const kinematics = useSimStore((s) => s.kinematics);
   const isDraggingGizmo = useSimStore((s) => s.isDraggingGizmo);
   const setIsDraggingGizmo = useSimStore((s) => s.setIsDraggingGizmo);
@@ -23,7 +24,7 @@ export function JointGizmo() {
     proxyObj.quaternion.set(...j.worldQuaternion);
   }, [selectedJoint, kinematics, isDraggingGizmo, proxyObj]);
 
-  if (!selectedJoint || interactionMode !== 'pose') return null;
+  if (!selectedJoint || interactionMode !== 'pose' || useTouchPad) return null;
 
   const handleMouseDown = () => {
     setIsDraggingGizmo(true);

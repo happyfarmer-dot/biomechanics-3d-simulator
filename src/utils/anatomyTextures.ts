@@ -1,5 +1,6 @@
 import {
   CanvasTexture,
+  DoubleSide,
   FrontSide,
   MeshStandardMaterial,
   RepeatWrapping,
@@ -409,6 +410,7 @@ export function getZAnatomyMuscleMaterial(
     metalness: 0.0,
     roughness: 0.42,
     envMapIntensity: 0.85,
+    side: DoubleSide,
     emissive,
     emissiveIntensity,
     transparent: isGhosted,

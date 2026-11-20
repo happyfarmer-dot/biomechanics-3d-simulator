@@ -37,6 +37,7 @@ interface SimState {
   forces: SpatialForce[];
   layers: LayerVisibility;
   isDraggingGizmo: boolean;
+  useTouchPad: boolean;
   activePresetId: string | null;
   modelStatus: { state: 'loading' | 'loaded' | 'error'; message?: string };
 
@@ -50,11 +51,13 @@ interface SimState {
 
   // Actions
   setModelStatus: (status: { state: 'loading' | 'loaded' | 'error'; message?: string }) => void;
+  setUseTouchPad: (use: boolean) => void;
   setSelectedJoint: (jointId: JointId | null) => void;
   setFocusedJoint: (jointId: JointId | null) => void;
   setInteractionMode: (mode: InteractionMode) => void;
   setSelectedForceId: (id: string | null) => void;
   setJointAngles: (jointId: JointId, angles: Partial<AnatomicalAngles>) => void;
+  applyPosePatch: (patch: Partial<PoseMap>) => void;
   setPose: (pose: PoseMap) => void;
   applyPreset: (presetId: string) => void;
   resetPose: () => void;
@@ -111,7 +114,7 @@ export const useSimStore = create<SimState>((set, get) => ({
   includeGravity: true,
   forces: [],
   layers: {
-    skin: true,
+    skin: false,
     skeleton: true,
     muscles: true,
     macroLigaments: true,
@@ -120,11 +123,13 @@ export const useSimStore = create<SimState>((set, get) => ({
     axesDebug: false,
   },
   isDraggingGizmo: false,
+  useTouchPad: true,
   activePresetId: 'neutral_standing',
   modelStatus: { state: 'loading' },
   ...initialDerived,
 
   setModelStatus: (modelStatus) => set({ modelStatus }),
+  setUseTouchPad: (useTouchPad) => set({ useTouchPad }),
 
   setSelectedJoint: (jointId) => {
     const s = get();
@@ -161,6 +166,21 @@ export const useSimStore = create<SimState>((set, get) => ({
         ...patch,
       },
     };
+    const derived = evaluateAll(
+      nextPose,
+      s.forces,
+      s.heightM,
+      s.bodyMassKg,
+      s.includeGravity,
+      s.focusedJointId,
+      s.selectedJoint
+    );
+    set({ pose: nextPose, activePresetId: null, ...derived });
+  },
+
+  applyPosePatch: (patch) => {
+    const s = get();
+    const nextPose: PoseMap = { ...s.pose, ...patch };
     const derived = evaluateAll(
       nextPose,
       s.forces,
