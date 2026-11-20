@@ -80,6 +80,7 @@ export function DirectLimbIK() {
           <mesh
             key={limb}
             position={pos}
+            renderOrder={999}
             onPointerDown={(e) => {
               e.stopPropagation();
               const camDir = new Vector3();
@@ -97,13 +98,14 @@ export function DirectLimbIK() {
               );
             }}
           >
-            <sphereGeometry args={[0.032 * scale, 16, 16]} />
+            <sphereGeometry args={[0.024 * scale, 16, 16]} />
             <meshStandardMaterial
               color="#38bdf8"
               emissive="#0284c7"
-              emissiveIntensity={0.6}
+              emissiveIntensity={0.75}
               transparent
-              opacity={0.45}
+              opacity={0.78}
+              depthTest={false}
               depthWrite={false}
             />
           </mesh>

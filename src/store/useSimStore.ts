@@ -23,6 +23,7 @@ import type {
   RiskSeverity,
   SoftTissueLoad,
   SpatialForce,
+  Vec3,
 } from '../types/biomechanics';
 
 interface SimState {
@@ -40,6 +41,7 @@ interface SimState {
   useTouchPad: boolean;
   activePresetId: string | null;
   modelStatus: { state: 'loading' | 'loaded' | 'error'; message?: string };
+  calibratedOffsets: Record<JointId, Vec3> | null;
 
   // Derived simulation outputs
   kinematics: KinematicsResult;
@@ -51,6 +53,7 @@ interface SimState {
 
   // Actions
   setModelStatus: (status: { state: 'loading' | 'loaded' | 'error'; message?: string }) => void;
+  setCalibratedOffsets: (offsets: Record<JointId, Vec3> | null) => void;
   setUseTouchPad: (use: boolean) => void;
   setSelectedJoint: (jointId: JointId | null) => void;
   setFocusedJoint: (jointId: JointId | null) => void;
@@ -58,6 +61,8 @@ interface SimState {
   setSelectedForceId: (id: string | null) => void;
   setJointAngles: (jointId: JointId, angles: Partial<AnatomicalAngles>) => void;
   applyPosePatch: (patch: Partial<PoseMap>) => void;
+  placeForceAtPoint: (targetJoint: JointId, worldPoint: Vec3) => void;
+  setForceVector: (id: string, vec: Vec3) => void;
   setPose: (pose: PoseMap) => void;
   applyPreset: (presetId: string) => void;
   resetPose: () => void;
@@ -78,9 +83,10 @@ function evaluateAll(
   bodyMassKg: number,
   includeGravity: boolean,
   focusedJointId: JointId | null,
-  selectedJoint: JointId | null
+  selectedJoint: JointId | null,
+  calibratedOffsets: Record<JointId, Vec3> | null
 ) {
-  const kinematics = computeKinematics(pose, heightM);
+  const kinematics = computeKinematics(pose, heightM, calibratedOffsets);
   const muscles = evaluateMuscles(kinematics, heightM);
   const loads = computeStatics(kinematics, forces, { includeGravity, bodyMassKg, heightM });
   const alerts = evaluateAllInjuries(pose, loads);
@@ -100,7 +106,8 @@ const initialDerived = evaluateAll(
   DEFAULT_MASS_KG,
   true,
   null,
-  'knee_R'
+  'knee_R',
+  null
 );
 
 export const useSimStore = create<SimState>((set, get) => ({
@@ -126,10 +133,26 @@ export const useSimStore = create<SimState>((set, get) => ({
   useTouchPad: true,
   activePresetId: 'neutral_standing',
   modelStatus: { state: 'loading' },
+  calibratedOffsets: null,
   ...initialDerived,
 
   setModelStatus: (modelStatus) => set({ modelStatus }),
   setUseTouchPad: (useTouchPad) => set({ useTouchPad }),
+
+  setCalibratedOffsets: (calibratedOffsets) => {
+    const s = get();
+    const derived = evaluateAll(
+      s.pose,
+      s.forces,
+      s.heightM,
+      s.bodyMassKg,
+      s.includeGravity,
+      s.focusedJointId,
+      s.selectedJoint,
+      calibratedOffsets
+    );
+    set({ calibratedOffsets, ...derived });
+  },
 
   setSelectedJoint: (jointId) => {
     const s = get();
@@ -173,7 +196,8 @@ export const useSimStore = create<SimState>((set, get) => ({
       s.bodyMassKg,
       s.includeGravity,
       s.focusedJointId,
-      s.selectedJoint
+      s.selectedJoint,
+      s.calibratedOffsets
     );
     set({ pose: nextPose, activePresetId: null, ...derived });
   },
@@ -188,9 +212,83 @@ export const useSimStore = create<SimState>((set, get) => ({
       s.bodyMassKg,
       s.includeGravity,
       s.focusedJointId,
-      s.selectedJoint
+      s.selectedJoint,
+      s.calibratedOffsets
     );
     set({ pose: nextPose, activePresetId: null, ...derived });
+  },
+
+  placeForceAtPoint: (targetJoint, worldPoint) => {
+    const s = get();
+    const j = s.kinematics.joints[targetJoint];
+    if (!j) return;
+
+    const dx = j.distalWorldPosition[0] - j.worldPosition[0];
+    const dy = j.distalWorldPosition[1] - j.worldPosition[1];
+    const dz = j.distalWorldPosition[2] - j.worldPosition[2];
+    const lenSq = dx * dx + dy * dy + dz * dz;
+
+    let ratio = 0.5;
+    if (lenSq > 1e-6) {
+      const px = worldPoint[0] - j.worldPosition[0];
+      const py = worldPoint[1] - j.worldPosition[1];
+      const pz = worldPoint[2] - j.worldPosition[2];
+      ratio = Math.max(0, Math.min(1, (px * dx + py * dy + pz * dz) / lenSq));
+    }
+
+    const rx = worldPoint[0] - j.worldPosition[0];
+    const rz = worldPoint[2] - j.worldPosition[2];
+    const surfaceAngleDeg = Math.round((Math.atan2(rx, rz) * 180) / Math.PI);
+
+    const activeId = s.selectedForceId;
+    const hasActive = activeId && s.forces.some((f) => f.id === activeId);
+
+    let nextForces: SpatialForce[];
+    let nextSelectedId: string;
+
+    if (hasActive) {
+      nextSelectedId = activeId!;
+      nextForces = s.forces.map((f) =>
+        f.id === activeId
+          ? { ...f, targetJoint, positionRatio: ratio, surfaceAngleDeg }
+          : f
+      );
+    } else {
+      const sideSign = worldPoint[0] >= 0 ? -1 : 1; // push inward toward midline
+      const newForce: SpatialForce = {
+        id: `force_${Date.now()}_${Math.random().toString(36).slice(2, 6)}`,
+        targetJoint,
+        positionRatio: ratio,
+        surfaceAngleDeg,
+        forceVectorWorld: [sideSign * 196.2, 0, 0],
+        scaleNpm: 1000,
+        label: '表面施力',
+      };
+      nextForces = [...s.forces, newForce];
+      nextSelectedId = newForce.id;
+    }
+
+    const derived = evaluateAll(
+      s.pose,
+      nextForces,
+      s.heightM,
+      s.bodyMassKg,
+      s.includeGravity,
+      s.focusedJointId,
+      s.selectedJoint,
+      s.calibratedOffsets
+    );
+    set({
+      forces: nextForces,
+      selectedForceId: nextSelectedId,
+      selectedJoint: targetJoint,
+      activePresetId: null,
+      ...derived,
+    });
+  },
+
+  setForceVector: (id, vec) => {
+    get().updateForce(id, { forceVectorWorld: vec });
   },
 
   setPose: (pose) => {
@@ -202,7 +300,8 @@ export const useSimStore = create<SimState>((set, get) => ({
       s.bodyMassKg,
       s.includeGravity,
       s.focusedJointId,
-      s.selectedJoint
+      s.selectedJoint,
+      s.calibratedOffsets
     );
     set({ pose, activePresetId: null, ...derived });
   },
@@ -225,7 +324,8 @@ export const useSimStore = create<SimState>((set, get) => ({
       s.bodyMassKg,
       preset.includeGravity,
       nextFocus,
-      nextSelected
+      nextSelected,
+      s.calibratedOffsets
     );
     set({
       pose: clonedPose,
@@ -255,7 +355,8 @@ export const useSimStore = create<SimState>((set, get) => ({
       clampedM,
       s.includeGravity,
       s.focusedJointId,
-      s.selectedJoint
+      s.selectedJoint,
+      s.calibratedOffsets
     );
     set({ heightM: clampedH, bodyMassKg: clampedM, ...derived });
   },
@@ -269,7 +370,8 @@ export const useSimStore = create<SimState>((set, get) => ({
       s.bodyMassKg,
       includeGravity,
       s.focusedJointId,
-      s.selectedJoint
+      s.selectedJoint,
+      s.calibratedOffsets
     );
     set({ includeGravity, ...derived });
   },
@@ -288,7 +390,8 @@ export const useSimStore = create<SimState>((set, get) => ({
       s.bodyMassKg,
       s.includeGravity,
       s.focusedJointId,
-      s.selectedJoint
+      s.selectedJoint,
+      s.calibratedOffsets
     );
     set({
       forces: nextForces,
@@ -309,7 +412,8 @@ export const useSimStore = create<SimState>((set, get) => ({
       s.bodyMassKg,
       s.includeGravity,
       s.focusedJointId,
-      s.selectedJoint
+      s.selectedJoint,
+      s.calibratedOffsets
     );
     set({ forces: nextForces, activePresetId: null, ...derived });
   },
@@ -335,7 +439,8 @@ export const useSimStore = create<SimState>((set, get) => ({
       s.bodyMassKg,
       s.includeGravity,
       s.focusedJointId,
-      s.selectedJoint
+      s.selectedJoint,
+      s.calibratedOffsets
     );
     set({ forces: nextForces, activePresetId: null, ...derived });
   },
@@ -352,7 +457,8 @@ export const useSimStore = create<SimState>((set, get) => ({
       s.bodyMassKg,
       s.includeGravity,
       s.focusedJointId,
-      s.selectedJoint
+      s.selectedJoint,
+      s.calibratedOffsets
     );
     set({
       forces: nextForces,

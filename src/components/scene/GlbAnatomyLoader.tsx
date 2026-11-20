@@ -1,40 +1,50 @@
 import { useGLTF } from '@react-three/drei';
 import { Component, Suspense, useEffect, useMemo, useState, type ReactNode } from 'react';
-import { Box3, Mesh, Quaternion, Vector3 } from 'three';
-import { createNeutralPose, JOINT_ORDER, SKELETON_CONFIG } from '../../data/skeletonConfig';
-import { computeKinematics, localEulerToQuaternion } from '../../engine/kinematics';
+import { Mesh, Vector3 } from 'three';
+import {
+  DEFAULT_HEIGHT_M,
+  JOINT_ORDER,
+  SKELETON_CONFIG,
+} from '../../data/skeletonConfig';
+import { calibrateSkeletonFromScene } from '../../engine/calibrateSkeleton';
+import {
+  prepareSkinnedMuscle,
+  resolveMuscleBonePair,
+  updateSkinnedMuscleVertices,
+  type SkinnedMuscleData,
+} from '../../engine/muscleSkinning';
 import { useSimStore } from '../../store/useSimStore';
-import type { JointId, Vec3 } from '../../types/biomechanics';
+import type { JointId, RiskSeverity, Vec3 } from '../../types/biomechanics';
 import {
   getSkinFresnelMaterial,
   getZAnatomyBoneMaterial,
   getZAnatomyMuscleMaterial,
 } from '../../utils/anatomyTextures';
 
-// Configure local Draco decoder (offline & GitHub Pages compatible)
 const DRACO_PATH = `${import.meta.env.BASE_URL}draco/`;
 useGLTF.setDecoderPath(DRACO_PATH);
 
 const DEFAULT_GLB_URL = `${import.meta.env.BASE_URL}models/anatomy_rigged.glb`;
 const VALID_JOINT_IDS = new Set<string>(JOINT_ORDER);
 
-interface RealAnatomyBinding {
+interface BoneBinding {
+  kind: 'bone' | 'skin';
   mesh: Mesh;
-  kind: 'bone' | 'muscle' | 'skin';
   jointId: JointId;
-  /** Local offset relative to the rest-pose joint center (m) */
   localOffset: Vec3;
-  /** Uniform scale factor applied to mesh geometry */
   modelScale: number;
+}
+
+interface MuscleBinding {
+  name: string;
+  jointId: JointId;
+  skinned: SkinnedMuscleData;
 }
 
 function parseMeshClassification(name: string): {
   kind: 'bone' | 'muscle' | 'skin';
   jointId: JointId;
 } {
-  // Primary convention from scripts/prepare_zanatomy.py:
-  //   BONE__<jointId>__<origName>
-  //   MUSCLE__<jointId>__<origName>
   const parts = name.split('__');
   if (parts.length >= 2) {
     const prefix = parts[0].toUpperCase();
@@ -46,10 +56,9 @@ function parseMeshClassification(name: string): {
     }
   }
 
-  // Fallback heuristic for custom .glb files
   const lower = name.toLowerCase();
-  const isL = lower.includes('_l') || lower.includes('left');
-  const isR = lower.includes('_r') || lower.includes('right');
+  const isL = lower.includes('_l') || lower.includes('.l') || lower.includes('left');
+  const isR = lower.includes('_r') || lower.includes('.r') || lower.includes('right');
   const side = isL ? '_L' : isR ? '_R' : '';
 
   const kind: 'bone' | 'muscle' | 'skin' = lower.includes('skin')
@@ -114,52 +123,63 @@ function RealAnatomyModel({
   const layers = useSimStore((s) => s.layers);
   const focusedJointId = useSimStore((s) => s.focusedJointId);
   const jointRiskMap = useSimStore((s) => s.jointRiskMap);
+  const interactionMode = useSimStore((s) => s.interactionMode);
   const setModelStatus = useSimStore((s) => s.setModelStatus);
+  const setCalibratedOffsets = useSimStore((s) => s.setCalibratedOffsets);
+  const placeForceAtPoint = useSimStore((s) => s.placeForceAtPoint);
 
-  const bindings = useMemo<RealAnatomyBinding[]>(() => {
-    scene.updateMatrixWorld(true);
-    const overallBox = new Box3().setFromObject(scene);
-    const size = new Vector3();
-    const center = new Vector3();
-    overallBox.getSize(size);
-    overallBox.getCenter(center);
+  // Step 1: Calibrate real anatomical joint centers from GLB bone bounding boxes
+  const calibration = useMemo(() => calibrateSkeletonFromScene(scene), [scene]);
 
-    const modelScale = size.y > 1e-4 ? heightM / size.y : 1;
-    const minY = overallBox.min.y;
-    const neutralKin = computeKinematics(createNeutralPose(), heightM);
+  useEffect(() => {
+    setCalibratedOffsets(calibration.offsets);
+    return () => setCalibratedOffsets(null);
+  }, [calibration, setCalibratedOffsets]);
 
-    const list: RealAnatomyBinding[] = [];
+  // Step 2: Prepare bone bindings and dual-bone LBS skinned muscles
+  const { boneBindings, muscleBindings } = useMemo(() => {
+    const bones: BoneBinding[] = [];
+    const muscles: MuscleBinding[] = [];
+    const [cx, minY, cz] = calibration.centerOffset;
+    const s = calibration.modelScale;
+
     scene.traverse((obj) => {
       if (!(obj instanceof Mesh)) return;
       const { kind, jointId } = parseMeshClassification(obj.name);
-      const cloned = obj.clone();
 
-      const worldPos = new Vector3();
-      obj.getWorldPosition(worldPos);
-      const normX = (worldPos.x - center.x) * modelScale;
-      const normY = (worldPos.y - minY) * modelScale;
-      const normZ = (worldPos.z - center.z) * modelScale;
+      if (kind === 'muscle') {
+        const { originJoint, insertionJoint } = resolveMuscleBonePair(obj.name, jointId);
+        const skinned = prepareSkinnedMuscle(obj, originJoint, insertionJoint, calibration);
+        muscles.push({
+          name: obj.name,
+          jointId,
+          skinned,
+        });
+      } else {
+        const cloned = obj.clone();
+        cloned.visible = true;
+        const worldPos = new Vector3();
+        obj.getWorldPosition(worldPos);
+        const normX = (worldPos.x - cx) * s;
+        const normY = (worldPos.y - minY) * s;
+        const normZ = (worldPos.z - cz) * s;
 
-      const jRest = neutralKin.joints[jointId].worldPosition;
-      const localOffset: Vec3 = [
-        normX - jRest[0],
-        normY - jRest[1],
-        normZ - jRest[2],
-      ];
-
-      list.push({
-        mesh: cloned,
-        kind,
-        jointId,
-        localOffset,
-        modelScale,
-      });
+        const jRest = calibration.restPositions[jointId];
+        bones.push({
+          kind,
+          mesh: cloned,
+          jointId,
+          localOffset: [normX - jRest[0], normY - jRest[1], normZ - jRest[2]],
+          modelScale: s,
+        });
+      }
     });
-    return list;
-  }, [scene, heightM]);
+
+    return { boneBindings: bones, muscleBindings: muscles };
+  }, [scene, calibration]);
 
   useEffect(() => {
-    const ok = bindings.length > 0;
+    const ok = boneBindings.length > 0 || muscleBindings.length > 0;
     onReady(ok);
     if (ok) {
       setModelStatus({ state: 'loaded' });
@@ -167,7 +187,26 @@ function RealAnatomyModel({
       setModelStatus({ state: 'error', message: '模型中無有效網格' });
     }
     return () => onReady(false);
-  }, [bindings.length, onReady, setModelStatus]);
+  }, [boneBindings.length, muscleBindings.length, onReady, setModelStatus]);
+
+  // Step 3: Update only muscles whose origin or insertion joint transform changed
+  const prevJointSigRef = useMemo(() => new Map<number, string>(), []);
+  const stretchRatios = useMemo(() => {
+    const ratios = new Array<number>(muscleBindings.length);
+    for (let i = 0; i < muscleBindings.length; i++) {
+      const m = muscleBindings[i];
+      const jO = kinematics.joints[m.skinned.originJoint];
+      const jI = kinematics.joints[m.skinned.insertionJoint];
+      const sig = `${jO.worldPosition[0].toFixed(4)},${jO.worldPosition[1].toFixed(4)},${jO.worldQuaternion[0].toFixed(4)},${jO.worldQuaternion[1].toFixed(4)},${jI.worldPosition[0].toFixed(4)},${jI.worldPosition[1].toFixed(4)},${jI.worldQuaternion[0].toFixed(4)},${jI.worldQuaternion[1].toFixed(4)},${heightM}`;
+      if (prevJointSigRef.get(i) !== sig) {
+        prevJointSigRef.set(i, sig);
+        ratios[i] = updateSkinnedMuscleVertices(m.skinned, kinematics, heightM);
+      } else {
+        ratios[i] = 1;
+      }
+    }
+    return ratios;
+  }, [muscleBindings, kinematics, heightM, prevJointSigRef]);
 
   const activeMacroSet = useMemo(() => {
     if (!focusedJointId) return null;
@@ -180,75 +219,83 @@ function RealAnatomyModel({
     return set;
   }, [focusedJointId]);
 
+  const hScale = heightM / DEFAULT_HEIGHT_M;
+
   return (
     <group name="real-zanatomy-model">
-      {bindings.map((b, idx) => {
+      {/* Bones attached to calibrated joints */}
+      {boneBindings.map((b, idx) => {
         if (b.kind === 'skin' && !layers.skin) return null;
         if (b.kind === 'bone' && !layers.skeleton) return null;
-        if (b.kind === 'muscle' && !layers.muscles) return null;
 
         const j = kinematics.joints[b.jointId];
         const isGhosted = Boolean(activeMacroSet && !activeMacroSet.has(b.jointId));
-        const risk = jointRiskMap[b.jointId];
-
-        let groupQuat = j.worldQuaternion;
-        if (b.kind === 'muscle') {
-          b.mesh.visible = true;
-          const lower = b.mesh.name.toLowerCase();
-          let distalId: JointId | null = null;
-          if (
-            b.jointId.startsWith('shoulder_') &&
-            (lower.includes('biceps') || lower.includes('triceps'))
-          ) {
-            distalId = (b.jointId === 'shoulder_L' ? 'elbow_L' : 'elbow_R') as JointId;
-          } else if (
-            b.jointId.startsWith('hip_') &&
-            ['rectus_femoris', 'rectus femoris', 'quadriceps', 'hamstring', 'biceps_femoris', 'biceps femoris', 'semitendinosus', 'semimembranosus', 'sartorius', 'gracilis'].some((k) =>
-              lower.includes(k)
-            )
-          ) {
-            distalId = (b.jointId === 'hip_L' ? 'knee_L' : 'knee_R') as JointId;
-          }
-
-          if (distalId) {
-            const distalLocal = localEulerToQuaternion(kinematics.joints[distalId].localEuler);
-            const partial = new Quaternion().slerp(distalLocal, 0.35);
-            const q = new Quaternion(...j.worldQuaternion).multiply(partial);
-            groupQuat = [q.x, q.y, q.z, q.w];
-          }
-        }
-
         const material =
           b.kind === 'skin'
             ? getSkinFresnelMaterial(isGhosted)
-            : b.kind === 'muscle'
-            ? getZAnatomyMuscleMaterial(risk, isGhosted)
             : getZAnatomyBoneMaterial(isGhosted);
 
         return (
           <group
-            key={`${b.mesh.name}_${idx}`}
+            key={`bone_${b.mesh.name}_${idx}`}
             position={j.worldPosition}
-            quaternion={groupQuat}
+            quaternion={j.worldQuaternion}
           >
             <primitive
               object={b.mesh}
-              position={b.localOffset}
-              scale={[b.modelScale, b.modelScale, b.modelScale]}
+              position={[
+                b.localOffset[0] * hScale,
+                b.localOffset[1] * hScale,
+                b.localOffset[2] * hScale,
+              ]}
+              scale={[b.modelScale * hScale, b.modelScale * hScale, b.modelScale * hScale]}
               material={material}
               castShadow={!isGhosted && b.kind !== 'skin'}
+              onClick={(e: { stopPropagation: () => void; point: Vector3 }) => {
+                if (interactionMode !== 'force') return;
+                e.stopPropagation();
+                placeForceAtPoint(b.jointId, [e.point.x, e.point.y, e.point.z]);
+              }}
             />
           </group>
         );
       })}
+
+      {/* Dual-Bone Skinned Muscles in world space */}
+      {layers.muscles &&
+        muscleBindings.map((m, idx) => {
+          const isGhosted = Boolean(
+            activeMacroSet &&
+              !activeMacroSet.has(m.skinned.originJoint) &&
+              !activeMacroSet.has(m.skinned.insertionJoint)
+          );
+          const stretch = stretchRatios[idx] ?? 1;
+          const jointRisk = jointRiskMap[m.jointId];
+          let status: RiskSeverity = jointRisk;
+          if (stretch > 1.3) status = 'critical';
+          else if (stretch > 1.15 && status === 'normal') status = 'warning';
+
+          const material = getZAnatomyMuscleMaterial(status, isGhosted);
+
+          return (
+            <mesh
+              key={`muscle_${m.name}_${idx}`}
+              geometry={m.skinned.geometry}
+              material={material}
+              frustumCulled={false}
+              visible
+              onClick={(e) => {
+                if (interactionMode !== 'force') return;
+                e.stopPropagation();
+                placeForceAtPoint(m.jointId, [e.point.x, e.point.y, e.point.z]);
+              }}
+            />
+          );
+        })}
     </group>
   );
 }
 
-/**
- * Non-blocking external Z-Anatomy GLB loader for ./models/anatomy_rigged.glb.
- * Reports explicit load status to TopBar and falls back to procedural anatomy on error.
- */
 export function GlbAnatomyLoader({
   url = DEFAULT_GLB_URL,
   onExternalActive,

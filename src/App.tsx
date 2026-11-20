@@ -5,6 +5,7 @@ import { InspectorPanel } from './components/ui/InspectorPanel';
 import { JointTouchPad } from './components/ui/JointTouchPad';
 import { LayerToolbar } from './components/ui/LayerToolbar';
 import { MacroHUD } from './components/ui/MacroHUD';
+import { SpatialForcePad } from './components/ui/SpatialForcePad';
 import { TopBar } from './components/ui/TopBar';
 
 export function App() {
@@ -21,6 +22,7 @@ export function App() {
           <InjuryAlertOverlay />
           <MacroHUD />
           <JointTouchPad />
+          <SpatialForcePad />
           <InspectorPanel />
         </main>
       </div>

@@ -98,9 +98,11 @@ export function localEulerToQuaternion(localEuler: LocalEuler): Quaternion {
 
 export function computeKinematics(
   pose: PoseMap,
-  heightM: number = DEFAULT_HEIGHT_M
+  heightM: number = DEFAULT_HEIGHT_M,
+  calibratedOffsets?: Record<JointId, Vec3> | null
 ): KinematicsResult {
   const joints = {} as Record<JointId, JointWorldState>;
+  const scale = heightM / DEFAULT_HEIGHT_M;
 
   for (const id of JOINT_ORDER) {
     const cfg = SKELETON_CONFIG[id];
@@ -108,11 +110,17 @@ export function computeKinematics(
     const localEuler = anatomicalToEuler(id, angles);
     const localQuat = localEulerToQuaternion(localEuler);
 
-    const localOffset = new Vector3(
-      cfg.offsetRatio[0] * heightM,
-      cfg.offsetRatio[1] * heightM,
-      cfg.offsetRatio[2] * heightM
-    );
+    const localOffset = calibratedOffsets?.[id]
+      ? new Vector3(
+          calibratedOffsets[id][0] * scale,
+          calibratedOffsets[id][1] * scale,
+          calibratedOffsets[id][2] * scale
+        )
+      : new Vector3(
+          cfg.offsetRatio[0] * heightM,
+          cfg.offsetRatio[1] * heightM,
+          cfg.offsetRatio[2] * heightM
+        );
 
     let worldPos: Vector3;
     let worldQuat: Quaternion;

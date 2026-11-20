@@ -1,6 +1,7 @@
-import { Html, Line, TransformControls } from '@react-three/drei';
-import { useEffect, useMemo, useState } from 'react';
-import { Group, Quaternion, Vector3 } from 'three';
+import { Html, Line } from '@react-three/drei';
+import { useThree } from '@react-three/fiber';
+import { useEffect, useMemo, useRef } from 'react';
+import { Plane, Quaternion, Raycaster, Vector2, Vector3 } from 'three';
 import { GRAVITY_MPS2 } from '../../data/skeletonConfig';
 import {
   getForceApplicationPoint,
@@ -19,30 +20,67 @@ function SingleSpatialForce({
   force: SpatialForce;
   isEditable: boolean;
 }) {
+  const { camera, gl } = useThree();
   const kinematics = useSimStore((s) => s.kinematics);
   const heightM = useSimStore((s) => s.heightM);
   const focusedJointId = useSimStore((s) => s.focusedJointId);
   const loads = useSimStore((s) => s.loads);
   const showComponents = useSimStore((s) => s.layers.spatialComponents);
-  const isDraggingGizmo = useSimStore((s) => s.isDraggingGizmo);
   const setIsDraggingGizmo = useSimStore((s) => s.setIsDraggingGizmo);
   const updateForce = useSimStore((s) => s.updateForce);
   const setSelectedForceId = useSimStore((s) => s.setSelectedForceId);
-
-  const [tipProxy, setTipProxy] = useState<Group | null>(null);
 
   const pApp = getForceApplicationPoint(force, kinematics, heightM);
   const pTip = getForceTipPoint(force, kinematics, heightM);
   const magN = getForceMagnitudeN(force);
 
+  const dragPlaneRef = useRef<Plane | null>(null);
+  const raycasterRef = useRef(new Raycaster());
+  const ndcRef = useRef(new Vector2());
+  const pAppRef = useRef<Vec3>(pApp);
+  pAppRef.current = pApp;
+
+  useEffect(() => {
+    const onPointerMove = (e: PointerEvent) => {
+      const plane = dragPlaneRef.current;
+      if (!plane) return;
+      const rect = gl.domElement.getBoundingClientRect();
+      ndcRef.current.x = ((e.clientX - rect.left) / rect.width) * 2 - 1;
+      ndcRef.current.y = -((e.clientY - rect.top) / rect.height) * 2 + 1;
+
+      raycasterRef.current.setFromCamera(ndcRef.current, camera);
+      const hit = new Vector3();
+      if (raycasterRef.current.ray.intersectPlane(plane, hit)) {
+        const s = force.scaleNpm || 1000;
+        const app = pAppRef.current;
+        const newVec: Vec3 = [
+          Math.round((hit.x - app[0]) * s * 10) / 10,
+          Math.round((hit.y - app[1]) * s * 10) / 10,
+          Math.round((hit.z - app[2]) * s * 10) / 10,
+        ];
+        updateForce(force.id, { forceVectorWorld: newVec });
+      }
+    };
+
+    const onPointerUp = () => {
+      if (!dragPlaneRef.current) return;
+      dragPlaneRef.current = null;
+      setIsDraggingGizmo(false);
+    };
+
+    window.addEventListener('pointermove', onPointerMove);
+    window.addEventListener('pointerup', onPointerUp);
+    window.addEventListener('pointercancel', onPointerUp);
+    return () => {
+      window.removeEventListener('pointermove', onPointerMove);
+      window.removeEventListener('pointerup', onPointerUp);
+      window.removeEventListener('pointercancel', onPointerUp);
+    };
+  }, [camera, gl, force.id, force.scaleNpm, updateForce, setIsDraggingGizmo]);
+
   const targetRefJointId = focusedJointId ?? force.targetJoint;
   const refJoint = kinematics.joints[targetRefJointId];
   const refLoad = loads[targetRefJointId];
-
-  useEffect(() => {
-    if (!tipProxy || isDraggingGizmo) return;
-    tipProxy.position.set(...pTip);
-  }, [pTip, tipProxy, isDraggingGizmo]);
 
   const { midpoint, length, quaternion } = useMemo(() => {
     const a = new Vector3(...pApp);
@@ -65,16 +103,14 @@ function SingleSpatialForce({
     };
   }, [pApp, pTip]);
 
-  // Projection guide lines onto reference joint's horizontal/coronal planes
   const projHorizontal: Vec3 = [pTip[0], refJoint.worldPosition[1], pTip[2]];
   const projOrigin: Vec3 = refJoint.worldPosition;
 
-  // Local force decomposition arrows at reference joint center
   const componentArrows = useMemo(() => {
     if (!showComponents || !refLoad) return null;
     const jPos = new Vector3(...refJoint.worldPosition);
     const jQuat = new Quaternion(...refJoint.worldQuaternion);
-    const scale = 0.00055; // 300 N -> ~0.165 m
+    const scale = 0.00055;
 
     const mkTip = (localVec: Vector3): Vec3 => {
       const world = jPos.clone().add(localVec.multiplyScalar(scale).applyQuaternion(jQuat));
@@ -89,18 +125,8 @@ function SingleSpatialForce({
     };
   }, [showComponents, refLoad, refJoint]);
 
-  const handleTipChange = () => {
-    if (!tipProxy) return;
-    const s = force.scaleNpm || 1000;
-    const newVec: Vec3 = [
-      Math.round((tipProxy.position.x - pApp[0]) * s * 10) / 10,
-      Math.round((tipProxy.position.y - pApp[1]) * s * 10) / 10,
-      Math.round((tipProxy.position.z - pApp[2]) * s * 10) / 10,
-    ];
-    updateForce(force.id, { forceVectorWorld: newVec });
-  };
-
-  const headLen = Math.min(0.06, Math.max(0.025, length * 0.25));
+  const shaftRadius = Math.min(0.014, 0.005 + magN / 30000);
+  const headLen = Math.min(0.065, Math.max(0.025, length * 0.25));
   const shaftLen = Math.max(0.01, length - headLen);
 
   return (
@@ -108,53 +134,72 @@ function SingleSpatialForce({
       {/* Blue Application Point P_app */}
       <mesh
         position={pApp}
+        renderOrder={998}
         onClick={(e) => {
           e.stopPropagation();
           setSelectedForceId(force.id);
         }}
       >
         <sphereGeometry args={[0.016, 14, 14]} />
-        <meshStandardMaterial color="#38bdf8" emissive="#0284c7" emissiveIntensity={0.6} />
+        <meshStandardMaterial
+          color="#38bdf8"
+          emissive="#0284c7"
+          emissiveIntensity={0.75}
+          depthTest={false}
+        />
       </mesh>
 
       {/* Shaft & Cone Arrow */}
       {length > 0.005 && (
         <group position={midpoint} quaternion={quaternion}>
           <mesh position={[0, -headLen / 2, 0]}>
-            <cylinderGeometry args={[0.006, 0.006, shaftLen, 10]} />
+            <cylinderGeometry args={[shaftRadius, shaftRadius, shaftLen, 10]} />
             <meshStandardMaterial color="#ef4444" emissive="#dc2626" emissiveIntensity={0.6} />
           </mesh>
           <mesh position={[0, shaftLen / 2, 0]}>
-            <coneGeometry args={[0.02, headLen, 14]} />
+            <coneGeometry args={[shaftRadius * 3, headLen, 14]} />
             <meshStandardMaterial color="#ef4444" emissive="#dc2626" emissiveIntensity={0.6} />
           </mesh>
         </group>
       )}
 
-      {/* Bright Red Tip Control Sphere P_tip */}
-      <mesh
-        position={pTip}
-        onClick={(e) => {
-          e.stopPropagation();
-          setSelectedForceId(force.id);
-        }}
-      >
-        <sphereGeometry args={[0.018, 14, 14]} />
-        <meshStandardMaterial color="#ff4d4d" emissive="#ef4444" emissiveIntensity={0.85} />
-      </mesh>
+      {/* Bright Red Tip Control Sphere P_tip + Invisible Large Touch Sphere (0.08m) */}
+      <group position={pTip}>
+        <mesh>
+          <sphereGeometry args={[0.018, 14, 14]} />
+          <meshStandardMaterial color="#ff4d4d" emissive="#ef4444" emissiveIntensity={0.85} />
+        </mesh>
+
+        {isEditable && (
+          <mesh
+            onPointerDown={(e) => {
+              e.stopPropagation();
+              setSelectedForceId(force.id);
+              const camDir = new Vector3();
+              camera.getWorldDirection(camDir);
+              dragPlaneRef.current = new Plane().setFromNormalAndCoplanarPoint(
+                camDir.negate(),
+                new Vector3(...pTip)
+              );
+              setIsDraggingGizmo(true);
+            }}
+          >
+            <sphereGeometry args={[0.08, 12, 12]} />
+            <meshBasicMaterial transparent opacity={0} depthWrite={false} />
+          </mesh>
+        )}
+      </group>
 
       {/* Dual-unit Floating Label */}
       <Html position={pTip} center distanceFactor={1.8} style={{ pointerEvents: 'none' }}>
         <div className="mt-6 whitespace-nowrap rounded bg-red-950/90 px-1.5 py-0.5 text-[10px] font-mono text-red-100 border border-red-500/60 shadow">
-          {force.label ? `${force.label} · ` : ''}
-          {magN.toFixed(0)} N ({(magN / GRAVITY_MPS2).toFixed(1)} kgf)
+          {magN.toFixed(0)} 牛頓 ({(magN / GRAVITY_MPS2).toFixed(1)} 公斤力)
         </div>
       </Html>
 
       {/* Spatial Depth Guides, Lever Arm r, and 3-Color Local Force Components */}
       {showComponents && (
         <>
-          {/* Yellow dashed lever arm r from joint center to P_app */}
           <Line
             points={[projOrigin, pApp]}
             color="#facc15"
@@ -163,7 +208,6 @@ function SingleSpatialForce({
             dashSize={0.025}
             gapSize={0.015}
           />
-          {/* Depth projection guide lines from P_tip */}
           <Line
             points={[pTip, projHorizontal, projOrigin]}
             color="#64748b"
@@ -174,7 +218,6 @@ function SingleSpatialForce({
             transparent
             opacity={0.7}
           />
-          {/* Local Force Decomposition at Joint Center */}
           {componentArrows && (
             <>
               <Line
@@ -203,7 +246,6 @@ function SingleSpatialForce({
               />
             </>
           )}
-          {/* 3D Bending Moment Arc at Joint Center */}
           {refLoad && refLoad.bendingMomentNm > 5 && (
             <mesh position={refJoint.worldPosition} quaternion={refJoint.worldQuaternion}>
               <torusGeometry args={[0.055, 0.0025, 8, 24, Math.PI * 1.2]} />
@@ -211,19 +253,6 @@ function SingleSpatialForce({
             </mesh>
           )}
         </>
-      )}
-
-      {/* TransformControls on P_tip when in Force Mode */}
-      <group ref={setTipProxy} position={pTip} />
-      {isEditable && tipProxy && (
-        <TransformControls
-          object={tipProxy}
-          mode="translate"
-          size={0.45}
-          onMouseDown={() => setIsDraggingGizmo(true)}
-          onMouseUp={() => setIsDraggingGizmo(false)}
-          onObjectChange={handleTipChange}
-        />
       )}
     </group>
   );
