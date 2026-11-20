@@ -1,51 +1,87 @@
 import { useGLTF } from '@react-three/drei';
 import { Component, Suspense, useEffect, useMemo, useState, type ReactNode } from 'react';
-import { Mesh } from 'three';
+import { Box3, Mesh, Vector3 } from 'three';
+import { createNeutralPose, JOINT_ORDER, SKELETON_CONFIG } from '../../data/skeletonConfig';
+import { computeKinematics } from '../../engine/kinematics';
 import { useSimStore } from '../../store/useSimStore';
-import type { JointId } from '../../types/biomechanics';
+import type { JointId, Vec3 } from '../../types/biomechanics';
 import {
-  getBoneMaterial,
-  getMuscleMaterial,
   getSkinFresnelMaterial,
+  getZAnatomyBoneMaterial,
+  getZAnatomyMuscleMaterial,
 } from '../../utils/anatomyTextures';
 
-const DEFAULT_GLB_URL = `${import.meta.env.BASE_URL}models/anatomy_rigged.glb`;
+// Configure local Draco decoder (offline & GitHub Pages compatible)
+const DRACO_PATH = `${import.meta.env.BASE_URL}draco/`;
+useGLTF.setDecoderPath(DRACO_PATH);
 
-interface GlbMeshBinding {
+const DEFAULT_GLB_URL = `${import.meta.env.BASE_URL}models/anatomy_rigged.glb`;
+const VALID_JOINT_IDS = new Set<string>(JOINT_ORDER);
+
+interface RealAnatomyBinding {
   mesh: Mesh;
   kind: 'bone' | 'muscle' | 'skin';
   jointId: JointId;
+  /** Local offset relative to the rest-pose joint center (m) */
+  localOffset: Vec3;
+  /** Uniform scale factor applied to mesh geometry */
+  modelScale: number;
 }
 
-function resolveJointFromName(name: string): JointId {
+function parseMeshClassification(name: string): {
+  kind: 'bone' | 'muscle' | 'skin';
+  jointId: JointId;
+} {
+  // Primary convention from scripts/prepare_zanatomy.py:
+  //   BONE__<jointId>__<origName>
+  //   MUSCLE__<jointId>__<origName>
+  const parts = name.split('__');
+  if (parts.length >= 2) {
+    const prefix = parts[0].toUpperCase();
+    const candidateJoint = parts[1];
+    if (VALID_JOINT_IDS.has(candidateJoint)) {
+      if (prefix === 'BONE') return { kind: 'bone', jointId: candidateJoint as JointId };
+      if (prefix === 'MUSCLE') return { kind: 'muscle', jointId: candidateJoint as JointId };
+      if (prefix === 'SKIN') return { kind: 'skin', jointId: candidateJoint as JointId };
+    }
+  }
+
+  // Fallback heuristic for custom .glb files
   const lower = name.toLowerCase();
   const isL = lower.includes('_l') || lower.includes('left');
   const isR = lower.includes('_r') || lower.includes('right');
   const side = isL ? '_L' : isR ? '_R' : '';
 
+  const kind: 'bone' | 'muscle' | 'skin' = lower.includes('skin')
+    ? 'skin'
+    : lower.includes('muscle')
+    ? 'muscle'
+    : 'bone';
+
+  let jointId: JointId = 'pelvis';
   if (lower.includes('femur') || lower.includes('quad') || lower.includes('hamstring') || lower.includes('glute')) {
-    return (`hip${side || '_R'}`) as JointId;
+    jointId = (`hip${side || '_R'}`) as JointId;
+  } else if (lower.includes('tibia') || lower.includes('fibula') || lower.includes('patella') || lower.includes('gastroc') || lower.includes('soleus')) {
+    jointId = (`knee${side || '_R'}`) as JointId;
+  } else if (lower.includes('foot') || lower.includes('talus') || lower.includes('ankle')) {
+    jointId = (`ankle${side || '_R'}`) as JointId;
+  } else if (lower.includes('humerus') || lower.includes('deltoid') || lower.includes('biceps') || lower.includes('triceps')) {
+    jointId = (`shoulder${side || '_R'}`) as JointId;
+  } else if (lower.includes('radius') || lower.includes('ulna') || lower.includes('forearm')) {
+    jointId = (`elbow${side || '_R'}`) as JointId;
+  } else if (lower.includes('hand') || lower.includes('wrist')) {
+    jointId = (`wrist${side || '_R'}`) as JointId;
+  } else if (lower.includes('skull') || lower.includes('head') || lower.includes('mandible')) {
+    jointId = 'head';
+  } else if (lower.includes('neck') || lower.includes('cervical')) {
+    jointId = 'neck';
+  } else if (lower.includes('lumbar') || lower.includes('erector')) {
+    jointId = 'lumbar';
+  } else if (lower.includes('thorax') || lower.includes('rib') || lower.includes('sternum') || lower.includes('pectoralis')) {
+    jointId = 'thorax';
   }
-  if (lower.includes('tibia') || lower.includes('fibula') || lower.includes('patella') || lower.includes('gastroc') || lower.includes('soleus')) {
-    return (`knee${side || '_R'}`) as JointId;
-  }
-  if (lower.includes('foot') || lower.includes('talus') || lower.includes('ankle')) {
-    return (`ankle${side || '_R'}`) as JointId;
-  }
-  if (lower.includes('humerus') || lower.includes('deltoid') || lower.includes('biceps') || lower.includes('triceps')) {
-    return (`shoulder${side || '_R'}`) as JointId;
-  }
-  if (lower.includes('radius') || lower.includes('ulna') || lower.includes('forearm')) {
-    return (`elbow${side || '_R'}`) as JointId;
-  }
-  if (lower.includes('hand') || lower.includes('wrist')) {
-    return (`wrist${side || '_R'}`) as JointId;
-  }
-  if (lower.includes('skull') || lower.includes('head') || lower.includes('mandible')) return 'head';
-  if (lower.includes('neck') || lower.includes('cervical')) return 'neck';
-  if (lower.includes('lumbar') || lower.includes('erector')) return 'lumbar';
-  if (lower.includes('thorax') || lower.includes('rib') || lower.includes('sternum') || lower.includes('pectoralis')) return 'thorax';
-  return 'pelvis';
+
+  return { kind, jointId };
 }
 
 class GlbSilentBoundary extends Component<
@@ -65,7 +101,7 @@ class GlbSilentBoundary extends Component<
   }
 }
 
-function GlbRiggedModel({
+function RealAnatomyModel({
   url,
   onReady,
 }: {
@@ -74,59 +110,102 @@ function GlbRiggedModel({
 }) {
   const { scene } = useGLTF(url);
   const kinematics = useSimStore((s) => s.kinematics);
+  const heightM = useSimStore((s) => s.heightM);
   const layers = useSimStore((s) => s.layers);
   const focusedJointId = useSimStore((s) => s.focusedJointId);
   const jointRiskMap = useSimStore((s) => s.jointRiskMap);
 
-  const bindings = useMemo<GlbMeshBinding[]>(() => {
-    const list: GlbMeshBinding[] = [];
+  const bindings = useMemo<RealAnatomyBinding[]>(() => {
+    scene.updateMatrixWorld(true);
+    const overallBox = new Box3().setFromObject(scene);
+    const size = new Vector3();
+    const center = new Vector3();
+    overallBox.getSize(size);
+    overallBox.getCenter(center);
+
+    const modelScale = size.y > 1e-4 ? heightM / size.y : 1;
+    const minY = overallBox.min.y;
+    const neutralKin = computeKinematics(createNeutralPose(), heightM);
+
+    const list: RealAnatomyBinding[] = [];
     scene.traverse((obj) => {
       if (!(obj instanceof Mesh)) return;
-      const n = obj.name.toLowerCase();
+      const { kind, jointId } = parseMeshClassification(obj.name);
       const cloned = obj.clone();
-      let kind: GlbMeshBinding['kind'] = 'bone';
-      if (n.includes('skin')) kind = 'skin';
-      else if (n.includes('muscle')) kind = 'muscle';
+
+      // Transform mesh world position into normalized standing space (feet at y=0, centered X/Z)
+      const worldPos = new Vector3();
+      obj.getWorldPosition(worldPos);
+      const normX = (worldPos.x - center.x) * modelScale;
+      const normY = (worldPos.y - minY) * modelScale;
+      const normZ = (worldPos.z - center.z) * modelScale;
+
+      const jRest = neutralKin.joints[jointId].worldPosition;
+      const localOffset: Vec3 = [
+        normX - jRest[0],
+        normY - jRest[1],
+        normZ - jRest[2],
+      ];
+
       list.push({
         mesh: cloned,
         kind,
-        jointId: resolveJointFromName(obj.name),
+        jointId,
+        localOffset,
+        modelScale,
       });
     });
     return list;
-  }, [scene]);
+  }, [scene, heightM]);
 
   useEffect(() => {
     onReady(bindings.length > 0);
     return () => onReady(false);
   }, [bindings.length, onReady]);
 
+  const activeMacroSet = useMemo(() => {
+    if (!focusedJointId) return null;
+    const set = new Set<JointId>([focusedJointId]);
+    const p = SKELETON_CONFIG[focusedJointId].parentId;
+    if (p) set.add(p);
+    for (const id of JOINT_ORDER) {
+      if (SKELETON_CONFIG[id].parentId === focusedJointId) set.add(id);
+    }
+    return set;
+  }, [focusedJointId]);
+
   return (
-    <group name="external-glb-anatomy">
+    <group name="real-zanatomy-model">
       {bindings.map((b, idx) => {
         if (b.kind === 'skin' && !layers.skin) return null;
         if (b.kind === 'bone' && !layers.skeleton) return null;
         if (b.kind === 'muscle' && !layers.muscles) return null;
 
         const j = kinematics.joints[b.jointId];
-        const isGhosted = Boolean(focusedJointId && focusedJointId !== b.jointId);
+        const isGhosted = Boolean(activeMacroSet && !activeMacroSet.has(b.jointId));
         const risk = jointRiskMap[b.jointId];
 
         const material =
           b.kind === 'skin'
             ? getSkinFresnelMaterial(isGhosted)
             : b.kind === 'muscle'
-            ? getMuscleMaterial(risk, isGhosted)
-            : getBoneMaterial(isGhosted);
+            ? getZAnatomyMuscleMaterial(risk, isGhosted)
+            : getZAnatomyBoneMaterial(isGhosted);
 
         return (
-          <primitive
+          <group
             key={`${b.mesh.name}_${idx}`}
-            object={b.mesh}
             position={j.worldPosition}
             quaternion={j.worldQuaternion}
-            material={material}
-          />
+          >
+            <primitive
+              object={b.mesh}
+              position={b.localOffset}
+              scale={[b.modelScale, b.modelScale, b.modelScale]}
+              material={material}
+              castShadow={!isGhosted && b.kind !== 'skin'}
+            />
+          </group>
         );
       })}
     </group>
@@ -134,7 +213,7 @@ function GlbRiggedModel({
 }
 
 /**
- * Non-blocking external GLB loader for /models/anatomy_rigged.glb.
+ * Non-blocking external Z-Anatomy GLB loader for /models/anatomy_rigged.glb.
  * Silently falls back to procedural anatomy if the file is absent.
  */
 export function GlbAnatomyLoader({
@@ -172,7 +251,7 @@ export function GlbAnatomyLoader({
   return (
     <GlbSilentBoundary onError={() => onExternalActive?.(false)}>
       <Suspense fallback={null}>
-        <GlbRiggedModel url={url} onReady={(ok) => onExternalActive?.(ok)} />
+        <RealAnatomyModel url={url} onReady={(ok) => onExternalActive?.(ok)} />
       </Suspense>
     </GlbSilentBoundary>
   );

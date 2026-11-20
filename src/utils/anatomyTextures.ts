@@ -357,3 +357,65 @@ export function getSkinFresnelMaterial(isGhosted: boolean): ShaderMaterial {
   }
   return matSkinFresnelSolid;
 }
+
+let matZBoneSolid: MeshStandardMaterial | null = null;
+let matZBoneGhost: MeshStandardMaterial | null = null;
+const zMuscleMatCache = new Map<string, MeshStandardMaterial>();
+
+export function getZAnatomyBoneMaterial(isGhosted: boolean): MeshStandardMaterial {
+  if (isGhosted) {
+    if (!matZBoneGhost) {
+      matZBoneGhost = new MeshStandardMaterial({
+        color: '#ede6d6',
+        metalness: 0.0,
+        roughness: 0.55,
+        envMapIntensity: 0.7,
+        transparent: true,
+        opacity: 0.12,
+        depthWrite: false,
+      });
+    }
+    return matZBoneGhost;
+  }
+  if (!matZBoneSolid) {
+    matZBoneSolid = new MeshStandardMaterial({
+      color: '#ede6d6',
+      metalness: 0.0,
+      roughness: 0.55,
+      envMapIntensity: 0.75,
+    });
+  }
+  return matZBoneSolid;
+}
+
+export function getZAnatomyMuscleMaterial(
+  status: 'normal' | 'warning' | 'critical',
+  isGhosted: boolean
+): MeshStandardMaterial {
+  const key = `${status}_${isGhosted ? 'ghost' : 'solid'}`;
+  const existing = zMuscleMatCache.get(key);
+  if (existing) return existing;
+
+  const tex = getMuscleTextures();
+  const emissive =
+    status === 'critical' ? '#ef4444' : status === 'warning' ? '#eab308' : '#000000';
+  const emissiveIntensity =
+    status === 'critical' ? 0.8 : status === 'warning' ? 0.45 : 0;
+
+  const mat = new MeshStandardMaterial({
+    color: '#a82020',
+    bumpMap: tex.bumpMap,
+    bumpScale: 0.004,
+    metalness: 0.0,
+    roughness: 0.42,
+    envMapIntensity: 0.85,
+    emissive,
+    emissiveIntensity,
+    transparent: isGhosted,
+    opacity: isGhosted ? 0.14 : 1,
+    depthWrite: !isGhosted,
+  });
+
+  zMuscleMatCache.set(key, mat);
+  return mat;
+}
