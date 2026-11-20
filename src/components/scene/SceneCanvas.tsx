@@ -1,7 +1,8 @@
-import { Grid } from '@react-three/drei';
+import { Environment, Grid, Lightformer } from '@react-three/drei';
 import { Canvas } from '@react-three/fiber';
 import { useState } from 'react';
 import { CameraRig } from './CameraRig';
+import { GlbAnatomyLoader } from './GlbAnatomyLoader';
 import { HumanRig } from './HumanRig';
 import { JointGizmo } from './JointGizmo';
 import { JointMacroDetail } from './JointMacroDetail';
@@ -10,6 +11,7 @@ import { SpatialForceEditor } from './SpatialForceEditor';
 
 export function SceneCanvas() {
   const [contextLost, setContextLost] = useState(false);
+  const [externalGlbActive, setExternalGlbActive] = useState(false);
 
   return (
     <div className="relative h-full w-full bg-[#090d16]">
@@ -45,15 +47,45 @@ export function SceneCanvas() {
         <color attach="background" args={['#090d16']} />
         <fog attach="fog" args={['#090d16', 6, 16]} />
 
-        <ambientLight intensity={0.48} />
+        {/* 程式化攝影棚環境貼圖 (無外部網路依賴，提供溫潤骨質與肌膜高光) */}
+        <Environment resolution={128}>
+          <Lightformer
+            form="rect"
+            intensity={2.2}
+            color="#fff7ed"
+            position={[3, 4, 3]}
+            scale={[4, 4, 1]}
+            target={[0, 1, 0]}
+          />
+          <Lightformer
+            form="rect"
+            intensity={1.6}
+            color="#bae6fd"
+            position={[-3, 2, -2]}
+            scale={[4, 4, 1]}
+            target={[0, 1, 0]}
+          />
+          <Lightformer
+            form="ring"
+            intensity={0.9}
+            color="#e2e8f0"
+            position={[0, -2, 2]}
+            rotation={[-Math.PI / 2, 0, 0]}
+            scale={[5, 5, 1]}
+          />
+        </Environment>
+
+        {/* 三點攝影棚打光：主光 + 冷色輪廓光 + 底部微弱補光 */}
+        <ambientLight intensity={0.32} />
         <directionalLight
           position={[3, 5, 4]}
-          intensity={1.35}
+          intensity={1.4}
+          color="#fffaf0"
           castShadow
           shadow-mapSize={[1024, 1024]}
         />
-        <directionalLight position={[-3, 2, -2]} intensity={0.45} color="#7dd3fc" />
-        <pointLight position={[0, 2.2, 2.5]} intensity={0.4} color="#e2e8f0" />
+        <directionalLight position={[-3.5, 2.5, -2.5]} intensity={0.65} color="#7dd3fc" />
+        <directionalLight position={[0, -2.5, 2]} intensity={0.35} color="#cbd5e1" />
 
         <Grid
           position={[0, 0, 0]}
@@ -68,9 +100,16 @@ export function SceneCanvas() {
           infiniteGrid
         />
 
-        <HumanRig />
+        <GlbAnatomyLoader onExternalActive={setExternalGlbActive} />
+
+        {!externalGlbActive && (
+          <>
+            <HumanRig />
+            <MuscleMeshes />
+          </>
+        )}
+
         <JointMacroDetail />
-        <MuscleMeshes />
         <SpatialForceEditor />
         <JointGizmo />
 

@@ -9,6 +9,7 @@ import {
   getBoneMaterial,
   getCartilageMaterial,
   getJointCapsuleMaterial,
+  getSkinFresnelMaterial,
 } from '../../utils/anatomyTextures';
 
 const UP_VEC = new Vector3(0, 1, 0);
@@ -98,17 +99,32 @@ function AnatomicalBoneMesh({
   const boneMat = getBoneMaterial(isGhosted);
   const cartMat = getCartilageMaterial(isGhosted);
 
-  // 1. Skull & Mandible
+  // 1. Skull with Eye Sockets (Orbits), Nasal Bridge & Contoured Mandible
   if (jointId === 'head') {
     return (
       <group>
-        {/* Cranium */}
-        <mesh position={[0, length * 0.12, -0.01 * scale]} scale={[0.92, 1.1, 1.05]} material={boneMat} castShadow={!isGhosted}>
-          <sphereGeometry args={[radius * 1.12, 24, 24]} />
+        {/* Cranium dome */}
+        <mesh position={[0, length * 0.16, -0.014 * scale]} scale={[0.9, 1.06, 1.08]} material={boneMat} castShadow={!isGhosted}>
+          <sphereGeometry args={[radius * 1.08, 24, 24]} />
         </mesh>
-        {/* Jaw / Mandible */}
-        <mesh position={[0, -length * 0.28, 0.032 * scale]} material={boneMat} castShadow={!isGhosted}>
-          <boxGeometry args={[radius * 0.92, length * 0.42, radius * 0.88]} />
+        {/* Brow / Supraorbital Ridge */}
+        <mesh position={[0, length * 0.08, 0.056 * scale]} material={boneMat}>
+          <boxGeometry args={[radius * 1.15, 0.012 * scale, 0.024 * scale]} />
+        </mesh>
+        {/* Left & Right Eye Sockets (Recessed Orbits) */}
+        {([-1, 1] as const).map((s) => (
+          <mesh key={s} position={[s * 0.025 * scale, length * 0.01, 0.062 * scale]} rotation={[0.1, 0, 0]}>
+            <cylinderGeometry args={[0.015 * scale, 0.012 * scale, 0.022 * scale, 12]} />
+            <meshStandardMaterial color="#1e293b" roughness={0.8} transparent={isGhosted} opacity={isGhosted ? 0.1 : 0.9} />
+          </mesh>
+        ))}
+        {/* Nasal Bridge & Cheekbones */}
+        <mesh position={[0, -length * 0.05, 0.068 * scale]} rotation={[-0.25, 0, 0]} material={boneMat}>
+          <boxGeometry args={[0.012 * scale, 0.028 * scale, 0.018 * scale]} />
+        </mesh>
+        {/* Contoured Mandible (Jaw) */}
+        <mesh position={[0, -length * 0.25, 0.028 * scale]} rotation={[0.12, 0, 0]} material={boneMat} castShadow={!isGhosted}>
+          <cylinderGeometry args={[radius * 0.56, radius * 0.36, length * 0.36, 12]} />
         </mesh>
       </group>
     );
@@ -124,53 +140,66 @@ function AnatomicalBoneMesh({
     return <SpineStack count={5} length={length} radius={radius * 0.85} boneMat={boneMat} discMat={cartMat} />;
   }
 
-  // 4. Thorax: 12 Thoracic Vertebrae + Ribcage + Sternum + Acromion/Glenoid
+  // 4. Thorax: 12 Thoracic Vertebrae + 12 Pairs of Independent Curved Ribs + Manubrium & Sternum
   if (jointId === 'thorax') {
-    const ribPairs = 7;
+    const ribPairs = 12;
     return (
       <group>
-        <group position={[0, 0, -0.055 * scale]}>
-          <SpineStack count={12} length={length} radius={radius * 0.42} boneMat={boneMat} discMat={cartMat} />
+        <group position={[0, 0, -0.058 * scale]}>
+          <SpineStack count={12} length={length} radius={radius * 0.4} boneMat={boneMat} discMat={cartMat} />
         </group>
-        {/* Sternum */}
-        <mesh position={[0, 0.02 * scale, 0.075 * scale]} rotation={[-0.12, 0, 0]} material={boneMat} castShadow={!isGhosted}>
-          <boxGeometry args={[0.028 * scale, length * 0.68, 0.012 * scale]} />
+        {/* Manubrium (upper sternum) */}
+        <mesh position={[0, length * 0.28, 0.072 * scale]} rotation={[-0.18, 0, 0]} material={boneMat} castShadow={!isGhosted}>
+          <boxGeometry args={[0.036 * scale, 0.034 * scale, 0.011 * scale]} />
         </mesh>
-        {/* Curved Bilateral Ribs */}
+        {/* Sternum body */}
+        <mesh position={[0, length * 0.04, 0.078 * scale]} rotation={[-0.08, 0, 0]} material={boneMat} castShadow={!isGhosted}>
+          <boxGeometry args={[0.022 * scale, length * 0.48, 0.01 * scale]} />
+        </mesh>
+        {/* 12 Pairs of Independent Left & Right Curved Ribs */}
         {Array.from({ length: ribPairs }).map((_, i) => {
           const t = i / (ribPairs - 1);
-          const y = length * (0.36 - t * 0.68);
-          const rx = (0.088 + Math.sin(t * Math.PI) * 0.042) * scale;
-          const rz = (0.068 + Math.sin(t * Math.PI) * 0.016) * scale;
+          const y = length * (0.38 - t * 0.78);
+          const profile = Math.sin(t * Math.PI * 0.85 + 0.22);
+          const rx = (0.062 + profile * 0.068) * scale;
+          const rz = (0.052 + profile * 0.032) * scale;
+          const arcAngle = i >= 10 ? Math.PI * 0.55 : Math.PI * 0.84; // Floating ribs 11-12 shorter
           return (
-            <mesh
-              key={i}
-              position={[0, y, 0.008 * scale]}
-              rotation={[Math.PI / 2 + 0.12, 0, 0]}
-              scale={[rx, rz, 1]}
-              material={boneMat}
-            >
-              <torusGeometry args={[1, 0.0055 / Math.max(rx, 0.01), 8, 28]} />
-            </mesh>
+            <group key={i} position={[0, y, 0.008 * scale]}>
+              {/* Left Rib Arc (+X) */}
+              <mesh
+                rotation={[Math.PI / 2 + 0.14, 0, -Math.PI * 0.44]}
+                scale={[rx, rz, 1]}
+                material={boneMat}
+              >
+                <torusGeometry args={[1, 0.0042 / Math.max(rx, 0.01), 6, 16, arcAngle]} />
+              </mesh>
+              {/* Right Rib Arc (-X) */}
+              <mesh
+                rotation={[Math.PI / 2 + 0.14, Math.PI, -Math.PI * 0.44]}
+                scale={[rx, rz, 1]}
+                material={boneMat}
+              >
+                <torusGeometry args={[1, 0.0042 / Math.max(rx, 0.01), 6, 16, arcAngle]} />
+              </mesh>
+            </group>
           );
         })}
         {/* Bilateral Clavicles & Acromion Arch */}
         {([-1, 1] as const).map((s) => (
           <group key={s}>
             <mesh
-              position={[s * 0.095 * scale, length * 0.34, 0.045 * scale]}
+              position={[s * 0.095 * scale, length * 0.35, 0.045 * scale]}
               rotation={[0, s * 0.25, s * 1.48]}
               material={boneMat}
             >
-              <capsuleGeometry args={[0.008 * scale, 0.14 * scale, 6, 10]} />
+              <capsuleGeometry args={[0.0075 * scale, 0.14 * scale, 6, 10]} />
             </mesh>
-            {/* Acromion process */}
             <mesh position={[s * 0.195 * scale, length * 0.32, 0]} material={boneMat}>
-              <boxGeometry args={[0.032 * scale, 0.012 * scale, 0.036 * scale]} />
+              <boxGeometry args={[0.032 * scale, 0.011 * scale, 0.034 * scale]} />
             </mesh>
-            {/* Glenoid cartilage socket */}
             <mesh position={[s * 0.198 * scale, length * 0.22, 0]} rotation={[0, 0, Math.PI / 2]} material={cartMat}>
-              <cylinderGeometry args={[0.024 * scale, 0.024 * scale, 0.01 * scale, 14]} />
+              <cylinderGeometry args={[0.023 * scale, 0.023 * scale, 0.01 * scale, 14]} />
             </mesh>
           </group>
         ))}
@@ -178,34 +207,40 @@ function AnatomicalBoneMesh({
     );
   }
 
-  // 5. Pelvis: Sacrum + Left/Right Iliac Wings + Pubic Symphysis
+  // 5. Pelvis: Sacrum + Curved Flared Iliac Wings + Pubic Symphysis + Acetabulum
   if (jointId === 'pelvis') {
     return (
       <group>
         {/* Sacrum */}
-        <mesh position={[0, 0, -0.045 * scale]} material={boneMat} castShadow={!isGhosted}>
-          <cylinderGeometry args={[0.045 * scale, 0.025 * scale, length * 0.85, 10]} />
+        <mesh position={[0, 0.01 * scale, -0.048 * scale]} rotation={[0.18, 0, 0]} material={boneMat} castShadow={!isGhosted}>
+          <cylinderGeometry args={[0.042 * scale, 0.016 * scale, length * 0.9, 10]} />
         </mesh>
-        {/* Iliac Wings */}
+        {/* Left & Right Flared Curved Iliac Wings */}
         {([-1, 1] as const).map((s) => (
           <group key={s}>
+            {/* Curved Iliac Crest Arch */}
             <mesh
-              position={[s * 0.088 * scale, 0.015 * scale, -0.01 * scale]}
-              rotation={[0.2, s * 0.35, s * -0.42]}
+              position={[s * 0.072 * scale, 0.01 * scale, -0.01 * scale]}
+              rotation={[0.25, s * 0.45, s * -0.45]}
+              scale={[0.068 * scale, 0.052 * scale, 0.02 * scale]}
               material={boneMat}
               castShadow={!isGhosted}
             >
-              <boxGeometry args={[0.085 * scale, length * 0.95, 0.022 * scale]} />
+              <sphereGeometry args={[1, 14, 14]} />
             </mesh>
-            {/* Acetabular cartilage socket */}
+            {/* Acetabular Cartilage Socket */}
             <mesh position={[s * 0.092 * scale, -length * 0.35, 0]} material={cartMat}>
-              <sphereGeometry args={[0.028 * scale, 14, 14]} />
+              <sphereGeometry args={[0.026 * scale, 14, 14]} />
+            </mesh>
+            {/* Ischial Tuberosity */}
+            <mesh position={[s * 0.065 * scale, -length * 0.52, -0.025 * scale]} material={boneMat}>
+              <sphereGeometry args={[0.016 * scale, 10, 10]} />
             </mesh>
           </group>
         ))}
-        {/* Pubic Arch */}
-        <mesh position={[0, -length * 0.38, 0.048 * scale]} rotation={[0, 0, Math.PI / 2]} material={boneMat}>
-          <capsuleGeometry args={[0.012 * scale, 0.11 * scale, 6, 10]} />
+        {/* Pubic Symphysis Arch */}
+        <mesh position={[0, -length * 0.42, 0.048 * scale]} rotation={[0, 0, Math.PI / 2]} material={boneMat}>
+          <capsuleGeometry args={[0.011 * scale, 0.1 * scale, 6, 10]} />
         </mesh>
       </group>
     );
@@ -340,8 +375,6 @@ function BoneSegment({
     ? radius * 1.6
     : radius * 1.95;
 
-  const skinOpacity = isGhosted ? 0.04 : 0.16;
-
   return (
     <group position={midpoint} quaternion={quaternion}>
       {showSkeleton && (
@@ -361,19 +394,12 @@ function BoneSegment({
       )}
 
       {showSkin && (
-        <mesh>
+        <mesh material={getSkinFresnelMaterial(isGhosted)}>
           {isHead ? (
             <sphereGeometry args={[skinRadius, 24, 24]} />
           ) : (
             <capsuleGeometry args={[skinRadius, Math.max(length * 0.65, 0.02), 8, 16]} />
           )}
-          <meshStandardMaterial
-            color="#94a3b8"
-            transparent
-            opacity={skinOpacity}
-            depthWrite={false}
-            roughness={0.7}
-          />
         </mesh>
       )}
     </group>

@@ -1,7 +1,9 @@
 import {
   CanvasTexture,
+  FrontSide,
   MeshStandardMaterial,
   RepeatWrapping,
+  ShaderMaterial,
   SRGBColorSpace,
 } from 'three';
 
@@ -199,8 +201,9 @@ export function getBoneMaterial(isGhosted: boolean): MeshStandardMaterial {
         bumpMap: tex.bumpMap,
         bumpScale: 0.0025,
         roughnessMap: tex.roughnessMap,
-        roughness: 0.55,
-        metalness: 0.04,
+        roughness: 0.42,
+        metalness: 0.05,
+        envMapIntensity: 0.7,
         transparent: true,
         opacity: 0.12,
         depthWrite: false,
@@ -215,8 +218,9 @@ export function getBoneMaterial(isGhosted: boolean): MeshStandardMaterial {
       bumpMap: tex.bumpMap,
       bumpScale: 0.0025,
       roughnessMap: tex.roughnessMap,
-      roughness: 0.55,
-      metalness: 0.04,
+      roughness: 0.42,
+      metalness: 0.05,
+      envMapIntensity: 0.75,
     });
   }
   return matBoneSolid;
@@ -227,8 +231,9 @@ export function getCartilageMaterial(isGhosted: boolean): MeshStandardMaterial {
     if (!matCartilageGhost) {
       matCartilageGhost = new MeshStandardMaterial({
         color: '#dbeafe',
-        roughness: 0.18,
+        roughness: 0.15,
         metalness: 0.05,
+        envMapIntensity: 0.9,
         transparent: true,
         opacity: 0.1,
         depthWrite: false,
@@ -239,8 +244,9 @@ export function getCartilageMaterial(isGhosted: boolean): MeshStandardMaterial {
   if (!matCartilageSolid) {
     matCartilageSolid = new MeshStandardMaterial({
       color: '#dbeafe',
-      roughness: 0.18,
+      roughness: 0.15,
       metalness: 0.05,
+      envMapIntensity: 0.95,
       transparent: true,
       opacity: 0.88,
     });
@@ -252,8 +258,9 @@ export function getJointCapsuleMaterial(): MeshStandardMaterial {
   if (!matJointCapsule) {
     matJointCapsule = new MeshStandardMaterial({
       color: '#93c5fd',
-      roughness: 0.28,
+      roughness: 0.22,
       metalness: 0.0,
+      envMapIntensity: 0.8,
       transparent: true,
       opacity: 0.2,
       depthWrite: false,
@@ -281,8 +288,9 @@ export function getMuscleMaterial(
     bumpMap: tex.bumpMap,
     bumpScale: 0.004,
     roughnessMap: tex.roughnessMap,
-    roughness: 0.44,
-    metalness: 0.04,
+    roughness: 0.35,
+    metalness: 0.05,
+    envMapIntensity: 0.9,
     emissive,
     emissiveIntensity,
     transparent: isGhosted,
@@ -292,4 +300,60 @@ export function getMuscleMaterial(
 
   muscleMatCache.set(key, mat);
   return mat;
+}
+
+let matSkinFresnelSolid: ShaderMaterial | null = null;
+let matSkinFresnelGhost: ShaderMaterial | null = null;
+
+function createFresnelMaterial(maxAlpha: number): ShaderMaterial {
+  return new ShaderMaterial({
+    uniforms: {
+      uMinAlpha: { value: 0.02 },
+      uMaxAlpha: { value: maxAlpha },
+      uRimColor: { value: [0.78, 0.86, 0.94] },
+    },
+    vertexShader: `
+      varying vec3 vViewNormal;
+      varying vec3 vViewDir;
+      void main() {
+        vec4 mvPos = modelViewMatrix * vec4(position, 1.0);
+        vViewNormal = normalize(normalMatrix * normal);
+        vViewDir = normalize(-mvPos.xyz);
+        gl_Position = projectionMatrix * mvPos;
+      }
+    `,
+    fragmentShader: `
+      uniform float uMinAlpha;
+      uniform float uMaxAlpha;
+      uniform vec3 uRimColor;
+      varying vec3 vViewNormal;
+      varying vec3 vViewDir;
+      void main() {
+        float ndotv = clamp(abs(dot(normalize(vViewNormal), normalize(vViewDir))), 0.0, 1.0);
+        float rim = pow(1.0 - ndotv, 2.4);
+        float alpha = mix(uMinAlpha, uMaxAlpha, rim);
+        gl_FragColor = vec4(uRimColor, alpha);
+      }
+    `,
+    transparent: true,
+    depthWrite: false,
+    side: FrontSide,
+  });
+}
+
+/**
+ * Fresnel Rim ShaderMaterial for outer skin contour:
+ * 0.02 alpha at perpendicular center, smoothly rising to 0.35 at grazing silhouette edges.
+ */
+export function getSkinFresnelMaterial(isGhosted: boolean): ShaderMaterial {
+  if (isGhosted) {
+    if (!matSkinFresnelGhost) {
+      matSkinFresnelGhost = createFresnelMaterial(0.08);
+    }
+    return matSkinFresnelGhost;
+  }
+  if (!matSkinFresnelSolid) {
+    matSkinFresnelSolid = createFresnelMaterial(0.35);
+  }
+  return matSkinFresnelSolid;
 }
