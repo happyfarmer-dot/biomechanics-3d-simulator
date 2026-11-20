@@ -7,19 +7,20 @@ import { TopBar } from './components/ui/TopBar';
 
 export function App() {
   return (
-    <div className="flex h-screen w-screen flex-col overflow-hidden bg-[#090d16] text-slate-100">
-      <TopBar />
-      <div className="relative flex flex-1 overflow-hidden">
+    <ErrorBoundary>
+      <div
+        translate="no"
+        className="notranslate flex h-dvh w-screen flex-col overflow-hidden bg-[#090d16] text-slate-100 select-none"
+      >
+        <TopBar />
         <main className="relative flex-1 overflow-hidden">
-          <ErrorBoundary>
-            <SceneCanvas />
-          </ErrorBoundary>
+          <SceneCanvas />
           <LayerToolbar />
           <MacroHUD />
+          <InspectorPanel />
         </main>
-        <InspectorPanel />
       </div>
-    </div>
+    </ErrorBoundary>
   );
 }
 

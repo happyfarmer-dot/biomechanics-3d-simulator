@@ -6,9 +6,9 @@ import { JOINT_ORDER, SKELETON_CONFIG } from '../../data/skeletonConfig';
 import { useSimStore } from '../../store/useSimStore';
 import type { JointId, RiskSeverity } from '../../types/biomechanics';
 import {
-  createBoneMaterial,
-  createCartilageMaterial,
-  createJointCapsuleMaterial,
+  getBoneMaterial,
+  getCartilageMaterial,
+  getJointCapsuleMaterial,
 } from '../../utils/anatomyTextures';
 
 const UP_VEC = new Vector3(0, 1, 0);
@@ -51,8 +51,8 @@ function SpineStack({
   count: number;
   length: number;
   radius: number;
-  boneMat: ReturnType<typeof createBoneMaterial>;
-  discMat: ReturnType<typeof createCartilageMaterial>;
+  boneMat: ReturnType<typeof getBoneMaterial>;
+  discMat: ReturnType<typeof getCartilageMaterial>;
 }) {
   const step = length / count;
   return (
@@ -95,8 +95,8 @@ function AnatomicalBoneMesh({
   scale: number;
   isGhosted: boolean;
 }) {
-  const boneMat = useMemo(() => createBoneMaterial(isGhosted), [isGhosted]);
-  const cartMat = useMemo(() => createCartilageMaterial(isGhosted), [isGhosted]);
+  const boneMat = getBoneMaterial(isGhosted);
+  const cartMat = getCartilageMaterial(isGhosted);
 
   // 1. Skull & Mandible
   if (jointId === 'head') {
@@ -394,9 +394,9 @@ function JointInternalStructures({
   showCapsule: boolean;
   isGhosted: boolean;
 }) {
-  const boneMat = useMemo(() => createBoneMaterial(isGhosted), [isGhosted]);
-  const cartMat = useMemo(() => createCartilageMaterial(isGhosted), [isGhosted]);
-  const capsuleMat = useMemo(() => createJointCapsuleMaterial(), []);
+  const boneMat = getBoneMaterial(isGhosted);
+  const cartMat = getCartilageMaterial(isGhosted);
+  const capsuleMat = getJointCapsuleMaterial();
 
   const isKnee = jointId.startsWith('knee_');
   const isMajorJoint =

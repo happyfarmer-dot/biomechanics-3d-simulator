@@ -35,7 +35,7 @@ export const GRAVITY_MPS2 = 9.81;
 export const SKELETON_CONFIG: Record<JointId, JointConfig> = {
   pelvis: {
     id: 'pelvis',
-    nameZh: '骨盆 (Root)',
+    nameZh: '骨盆',
     parentId: null,
     offsetRatio: [0, ROOT_HEIGHT_RATIO, 0],
     distalRatio: [0, 0.07, 0],
@@ -46,7 +46,7 @@ export const SKELETON_CONFIG: Record<JointId, JointConfig> = {
   },
   lumbar: {
     id: 'lumbar',
-    nameZh: '腰椎 (L1-L5)',
+    nameZh: '腰椎',
     parentId: 'pelvis',
     offsetRatio: [0, 0.07, 0],
     distalRatio: [0, 0.12, 0],
@@ -57,7 +57,7 @@ export const SKELETON_CONFIG: Record<JointId, JointConfig> = {
   },
   thorax: {
     id: 'thorax',
-    nameZh: '胸廓 (Thorax)',
+    nameZh: '胸廓',
     parentId: 'lumbar',
     offsetRatio: [0, 0.12, 0],
     distalRatio: [0, 0.14, 0],
@@ -68,7 +68,7 @@ export const SKELETON_CONFIG: Record<JointId, JointConfig> = {
   },
   neck: {
     id: 'neck',
-    nameZh: '頸椎 (Cervical)',
+    nameZh: '頸椎',
     parentId: 'thorax',
     offsetRatio: [0, 0.14, 0],
     distalRatio: [0, 0.06, 0],
@@ -79,7 +79,7 @@ export const SKELETON_CONFIG: Record<JointId, JointConfig> = {
   },
   head: {
     id: 'head',
-    nameZh: '頭部 (Head)',
+    nameZh: '頭部',
     parentId: 'neck',
     offsetRatio: [0, 0.06, 0],
     distalRatio: [0, 0.08, 0],

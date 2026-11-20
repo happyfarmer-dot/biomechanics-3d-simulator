@@ -1,4 +1,4 @@
-import { useMemo } from 'react';
+import { useEffect, useMemo } from 'react';
 import {
   BufferAttribute,
   BufferGeometry,
@@ -7,7 +7,7 @@ import {
 } from 'three';
 import { MUSCLE_BELLY_RADIUS } from '../../data/muscleConfig';
 import { useSimStore } from '../../store/useSimStore';
-import { getMuscleTextures } from '../../utils/anatomyTextures';
+import { getMuscleMaterial } from '../../utils/anatomyTextures';
 
 function buildFusiformGeometry(
   points: [number, number, number][],
@@ -17,11 +17,10 @@ function buildFusiformGeometry(
   const vecs = points.map((p) => new Vector3(...p));
   const curve = new CatmullRomCurve3(vecs, false, 'centripetal', 0.5);
 
-  const tubularSegments = 20;
-  const radialSegments = 10;
+  const tubularSegments = 14;
+  const radialSegments = 8;
   const frames = curve.computeFrenetFrames(tubularSegments, false);
 
-  // Muscle belly swells slightly when shortened (strain < 0)
   const contractionSwell = strain < 0 ? 1 + Math.min(0.25, -strain * 0.65) : 1;
 
   const ringCount = tubularSegments + 1;
@@ -39,7 +38,6 @@ function buildFusiformGeometry(
     const t = i / tubularSegments;
     curve.getPointAt(t, P);
 
-    // Fusiform radius profile: slender tendons at ends (0.22), plump belly in center
     const bellyCurve = Math.pow(Math.sin(Math.PI * t), 0.65);
     const radius = baseRadius * (0.22 + 0.78 * bellyCurve * contractionSwell);
 
@@ -109,7 +107,6 @@ function SingleMuscleMesh({
   heightScale: number;
   isGhosted: boolean;
 }) {
-  const textures = useMemo(() => getMuscleTextures(), []);
   const baseRadius = (MUSCLE_BELLY_RADIUS[groupId] ?? 0.024) * heightScale;
 
   const geometry = useMemo(
@@ -117,30 +114,15 @@ function SingleMuscleMesh({
     [pointsWorld, baseRadius, strain]
   );
 
-  const emissive =
-    status === 'critical' ? '#ef4444' : status === 'warning' ? '#eab308' : '#000000';
-  const emissiveIntensity =
-    status === 'critical' ? 0.78 : status === 'warning' ? 0.42 : 0;
+  useEffect(() => {
+    return () => {
+      geometry.dispose();
+    };
+  }, [geometry]);
 
-  return (
-    <mesh geometry={geometry} castShadow={!isGhosted}>
-      <meshPhysicalMaterial
-        map={textures.albedoMap}
-        bumpMap={textures.bumpMap}
-        bumpScale={0.004}
-        roughnessMap={textures.roughnessMap}
-        roughness={0.44}
-        metalness={0.02}
-        clearcoat={0.28}
-        clearcoatRoughness={0.35}
-        emissive={emissive}
-        emissiveIntensity={emissiveIntensity}
-        transparent={isGhosted}
-        opacity={isGhosted ? 0.14 : 1}
-        depthWrite={!isGhosted}
-      />
-    </mesh>
-  );
+  const material = getMuscleMaterial(status, isGhosted);
+
+  return <mesh geometry={geometry} material={material} castShadow={!isGhosted} />;
 }
 
 export function MuscleMeshes() {

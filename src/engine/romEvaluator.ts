@@ -13,9 +13,9 @@ import type {
 } from '../types/biomechanics';
 
 const AXIS_LABELS: Record<keyof AnatomicalAngles, string> = {
-  flexion: '屈曲/伸展 (Flexion)',
-  abduction: '外展/內收 (Abduction)',
-  rotation: '軸向旋轉 (Rotation)',
+  flexion: '屈曲/伸展',
+  abduction: '外展/內收',
+  rotation: '軸向旋轉',
 };
 
 export function evaluateSingleAxisRom(pose: PoseMap): InjuryAlert[] {
@@ -36,7 +36,7 @@ export function evaluateSingleAxisRom(pose: PoseMap): InjuryAlert[] {
           category: 'rom',
           jointId,
           severity: 'critical',
-          title: `${cfg.nameZh} ${AXIS_LABELS[axis]} 超出 AAOS 安全活動度`,
+          title: `${cfg.nameZh} ${AXIS_LABELS[axis]} 超出安全活動度`,
           tissue: '關節囊、韌帶與關節軟骨',
           mechanism: `當前角度 ${val.toFixed(1)}° 超出安全範圍 [${min}°, ${max}°]，可能造成關節囊過度牽拉或骨性撞擊。`,
           recommendation: `將 ${cfg.nameZh} 角度調整回 [${min}°, ${max}°] 安全區間內。`,
@@ -53,7 +53,7 @@ export function evaluateSingleAxisRom(pose: PoseMap): InjuryAlert[] {
             severity: 'warning',
             title: `${cfg.nameZh} ${AXIS_LABELS[axis]} 接近極限邊界`,
             tissue: '關節周圍軟組織與韌帶',
-            mechanism: `當前角度 ${val.toFixed(1)}° 距離 AAOS 活動度極限 [${min}°, ${max}°] 不足 5°。`,
+            mechanism: `當前角度 ${val.toFixed(1)}° 距離活動度極限 [${min}°, ${max}°] 不足 5°。`,
             recommendation: `留意末端角度負荷，避免再施加額外外力。`,
             valueText: `${val.toFixed(1)}° (接近極限)`,
           });

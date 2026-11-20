@@ -1,25 +1,26 @@
 import {
   CanvasTexture,
-  MeshPhysicalMaterial,
   MeshStandardMaterial,
   RepeatWrapping,
   SRGBColorSpace,
 } from 'three';
 
-export interface MuscleTextureSet {
+export interface TextureSet {
   albedoMap: CanvasTexture;
   bumpMap: CanvasTexture;
   roughnessMap: CanvasTexture;
 }
 
-export interface BoneTextureSet {
-  albedoMap: CanvasTexture;
-  bumpMap: CanvasTexture;
-  roughnessMap: CanvasTexture;
-}
+let cachedMuscleTex: TextureSet | null = null;
+let cachedBoneTex: TextureSet | null = null;
 
-let cachedMuscleTex: MuscleTextureSet | null = null;
-let cachedBoneTex: BoneTextureSet | null = null;
+let matBoneSolid: MeshStandardMaterial | null = null;
+let matBoneGhost: MeshStandardMaterial | null = null;
+let matCartilageSolid: MeshStandardMaterial | null = null;
+let matCartilageGhost: MeshStandardMaterial | null = null;
+let matJointCapsule: MeshStandardMaterial | null = null;
+
+const muscleMatCache = new Map<string, MeshStandardMaterial>();
 
 function pseudoNoise(x: number, y: number): number {
   const n = Math.sin(x * 12.9898 + y * 78.233) * 43758.5453;
@@ -27,13 +28,12 @@ function pseudoNoise(x: number, y: number): number {
 }
 
 /**
- * Generates seamless striated muscle textures (Albedo with tendon-to-belly gradient,
- * Bump map for longitudinal fascicle ridges, Roughness map for moist fascia sheen).
+ * Generates seamless 256x256 striated muscle textures (mobile GPU friendly).
  */
-export function getMuscleTextures(): MuscleTextureSet {
+export function getMuscleTextures(): TextureSet {
   if (cachedMuscleTex) return cachedMuscleTex;
 
-  const size = 512;
+  const size = 256;
   const albedoCanvas = document.createElement('canvas');
   const bumpCanvas = document.createElement('canvas');
   const roughCanvas = document.createElement('canvas');
@@ -49,30 +49,24 @@ export function getMuscleTextures(): MuscleTextureSet {
   const rImg = rCtx.createImageData(size, size);
 
   for (let y = 0; y < size; y++) {
-    // v = 0..1 along muscle length (ends are tendon, middle is muscle belly)
     const v = y / (size - 1);
     const distFromEnd = Math.min(v, 1 - v);
-    // Smoothstep tendon blend: 0 at ends (tendon), 1 in belly (muscle)
     const tRaw = Math.max(0, Math.min(1, (distFromEnd - 0.06) / 0.14));
     const muscleMask = tRaw * tRaw * (3 - 2 * tRaw);
 
     for (let x = 0; x < size; x++) {
       const u = x / size;
-      // Longitudinal fascicle waves (seamless in u)
       const angle = u * Math.PI * 2;
-      const majorBundles = 0.5 + 0.5 * Math.sin(angle * 18 + Math.sin(v * 6) * 0.4);
-      const fineFibers = 0.5 + 0.5 * Math.sin(angle * 64 + Math.cos(v * 14) * 0.5);
-      const grain = pseudoNoise(x * 0.35, y * 0.08);
-      const sarcomere = 0.5 + 0.5 * Math.sin(v * Math.PI * 90);
+      const majorBundles = 0.5 + 0.5 * Math.sin(angle * 16 + Math.sin(v * 6) * 0.4);
+      const fineFibers = 0.5 + 0.5 * Math.sin(angle * 48 + Math.cos(v * 12) * 0.5);
+      const grain = pseudoNoise(x * 0.5, y * 0.12);
 
       const fiberHeight = majorBundles * 0.55 + fineFibers * 0.3 + grain * 0.15;
 
-      // Muscle color: deep crimson to bright striated red
-      const mR = 115 + fiberHeight * 88 + sarcomere * 8;
+      const mR = 115 + fiberHeight * 88;
       const mG = 16 + fiberHeight * 28;
       const mB = 22 + fiberHeight * 24;
 
-      // Tendon color: pearly ivory-white with subtle fibrous sheen
       const tR = 218 + fiberHeight * 28;
       const tG = 213 + fiberHeight * 28;
       const tB = 202 + fiberHeight * 26;
@@ -83,14 +77,12 @@ export function getMuscleTextures(): MuscleTextureSet {
       aImg.data[idx + 2] = Math.min(255, mB * muscleMask + tB * (1 - muscleMask));
       aImg.data[idx + 3] = 255;
 
-      // Bump height (0..255)
-      const bumpVal = Math.floor((fiberHeight * 0.85 + sarcomere * 0.15) * 255);
+      const bumpVal = Math.floor(fiberHeight * 255);
       bImg.data[idx] = bumpVal;
       bImg.data[idx + 1] = bumpVal;
       bImg.data[idx + 2] = bumpVal;
       bImg.data[idx + 3] = 255;
 
-      // Roughness: muscle 0.36..0.50 (moist fascia), tendon 0.26..0.34
       const rough =
         muscleMask * (0.36 + (1 - fiberHeight) * 0.14) +
         (1 - muscleMask) * (0.26 + (1 - fiberHeight) * 0.08);
@@ -124,9 +116,9 @@ export function getMuscleTextures(): MuscleTextureSet {
 }
 
 /**
- * Generates seamless cortical bone textures (ivory-warm periosteal grain).
+ * Generates seamless 256x256 cortical bone textures.
  */
-export function getBoneTextures(): BoneTextureSet {
+export function getBoneTextures(): TextureSet {
   if (cachedBoneTex) return cachedBoneTex;
 
   const size = 256;
@@ -195,42 +187,109 @@ export function getBoneTextures(): BoneTextureSet {
   return cachedBoneTex;
 }
 
-export function createBoneMaterial(isGhosted: boolean): MeshStandardMaterial {
-  const tex = getBoneTextures();
-  return new MeshStandardMaterial({
+/**
+ * Shared singleton MeshStandardMaterial instances (no MeshPhysicalMaterial/transmission).
+ */
+export function getBoneMaterial(isGhosted: boolean): MeshStandardMaterial {
+  if (isGhosted) {
+    if (!matBoneGhost) {
+      const tex = getBoneTextures();
+      matBoneGhost = new MeshStandardMaterial({
+        map: tex.albedoMap,
+        bumpMap: tex.bumpMap,
+        bumpScale: 0.0025,
+        roughnessMap: tex.roughnessMap,
+        roughness: 0.55,
+        metalness: 0.04,
+        transparent: true,
+        opacity: 0.12,
+        depthWrite: false,
+      });
+    }
+    return matBoneGhost;
+  }
+  if (!matBoneSolid) {
+    const tex = getBoneTextures();
+    matBoneSolid = new MeshStandardMaterial({
+      map: tex.albedoMap,
+      bumpMap: tex.bumpMap,
+      bumpScale: 0.0025,
+      roughnessMap: tex.roughnessMap,
+      roughness: 0.55,
+      metalness: 0.04,
+    });
+  }
+  return matBoneSolid;
+}
+
+export function getCartilageMaterial(isGhosted: boolean): MeshStandardMaterial {
+  if (isGhosted) {
+    if (!matCartilageGhost) {
+      matCartilageGhost = new MeshStandardMaterial({
+        color: '#dbeafe',
+        roughness: 0.18,
+        metalness: 0.05,
+        transparent: true,
+        opacity: 0.1,
+        depthWrite: false,
+      });
+    }
+    return matCartilageGhost;
+  }
+  if (!matCartilageSolid) {
+    matCartilageSolid = new MeshStandardMaterial({
+      color: '#dbeafe',
+      roughness: 0.18,
+      metalness: 0.05,
+      transparent: true,
+      opacity: 0.88,
+    });
+  }
+  return matCartilageSolid;
+}
+
+export function getJointCapsuleMaterial(): MeshStandardMaterial {
+  if (!matJointCapsule) {
+    matJointCapsule = new MeshStandardMaterial({
+      color: '#93c5fd',
+      roughness: 0.28,
+      metalness: 0.0,
+      transparent: true,
+      opacity: 0.2,
+      depthWrite: false,
+    });
+  }
+  return matJointCapsule;
+}
+
+export function getMuscleMaterial(
+  status: 'normal' | 'warning' | 'critical',
+  isGhosted: boolean
+): MeshStandardMaterial {
+  const key = `${status}_${isGhosted ? 'ghost' : 'solid'}`;
+  const existing = muscleMatCache.get(key);
+  if (existing) return existing;
+
+  const tex = getMuscleTextures();
+  const emissive =
+    status === 'critical' ? '#ef4444' : status === 'warning' ? '#eab308' : '#000000';
+  const emissiveIntensity =
+    status === 'critical' ? 0.78 : status === 'warning' ? 0.42 : 0;
+
+  const mat = new MeshStandardMaterial({
     map: tex.albedoMap,
     bumpMap: tex.bumpMap,
-    bumpScale: 0.0025,
+    bumpScale: 0.004,
     roughnessMap: tex.roughnessMap,
-    roughness: 0.55,
+    roughness: 0.44,
     metalness: 0.04,
+    emissive,
+    emissiveIntensity,
     transparent: isGhosted,
-    opacity: isGhosted ? 0.12 : 1,
+    opacity: isGhosted ? 0.14 : 1,
     depthWrite: !isGhosted,
   });
-}
 
-export function createCartilageMaterial(isGhosted: boolean): MeshPhysicalMaterial {
-  return new MeshPhysicalMaterial({
-    color: '#dbeafe',
-    roughness: 0.15,
-    metalness: 0.02,
-    clearcoat: 0.75,
-    clearcoatRoughness: 0.12,
-    transparent: true,
-    opacity: isGhosted ? 0.1 : 0.88,
-    depthWrite: !isGhosted,
-  });
-}
-
-export function createJointCapsuleMaterial(): MeshPhysicalMaterial {
-  return new MeshPhysicalMaterial({
-    color: '#93c5fd',
-    roughness: 0.25,
-    metalness: 0.0,
-    clearcoat: 0.4,
-    transparent: true,
-    opacity: 0.22,
-    depthWrite: false,
-  });
+  muscleMatCache.set(key, mat);
+  return mat;
 }
