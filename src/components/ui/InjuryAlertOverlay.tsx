@@ -3,7 +3,9 @@ import { useMemo, useState } from 'react';
 import { useSimStore } from '../../store/useSimStore';
 
 export function InjuryAlertOverlay() {
-  const [expanded, setExpanded] = useState(false);
+  const [collapsed, setCollapsed] = useState(false);
+  const [showAll, setShowAll] = useState(false);
+
   const alerts = useSimStore((s) => s.alerts);
   const focusedJointId = useSimStore((s) => s.focusedJointId);
   const setFocusedJoint = useSimStore((s) => s.setFocusedJoint);
@@ -17,14 +19,51 @@ export function InjuryAlertOverlay() {
 
   if (sortedAlerts.length === 0) return null;
 
-  const visibleAlerts = expanded ? sortedAlerts : sortedAlerts.slice(0, 2);
+  const topClass = focusedJointId ? 'top-36' : 'top-14';
+  const topAlert = sortedAlerts[0];
+
+  if (collapsed) {
+    return (
+      <div
+        data-testid="injury-alert-overlay"
+        className={`pointer-events-auto absolute left-3 ${topClass} z-20 flex h-8 max-w-[65vw] items-center justify-between gap-1.5 rounded-full border border-red-500/60 bg-slate-950/90 px-2.5 text-[11px] text-red-100 shadow-xl backdrop-blur-md`}
+      >
+        <span className="h-2 w-2 shrink-0 rounded-full bg-red-500 animate-pulse" />
+        <span className="truncate font-medium">
+          ⚠ {sortedAlerts.length} 項受傷警示（{topAlert.title}）
+        </span>
+        <button
+          type="button"
+          onClick={() => setCollapsed(false)}
+          className="ml-1 flex shrink-0 items-center gap-0.5 rounded-full bg-red-500/20 px-1.5 py-0.5 text-[10px] font-semibold text-red-200 hover:bg-red-500/30 cursor-pointer"
+        >
+          ▼ 展開
+        </button>
+      </div>
+    );
+  }
+
+  const visibleAlerts = showAll ? sortedAlerts : sortedAlerts.slice(0, 2);
   const extraCount = sortedAlerts.length - 2;
 
   return (
     <div
       data-testid="injury-alert-overlay"
-      className={`pointer-events-auto absolute left-3 ${focusedJointId ? 'top-36' : 'top-14'} z-20 w-[min(265px,calc(100vw-8rem))] space-y-1.5`}
+      className={`pointer-events-auto absolute left-3 ${topClass} z-20 w-[min(265px,calc(100vw-8rem))] space-y-1.5`}
     >
+      <div className="flex items-center justify-between rounded-lg border border-slate-700/80 bg-slate-950/90 px-2.5 py-1 text-[10px] text-slate-300 shadow backdrop-blur-md">
+        <span className="font-semibold text-red-300">
+          ⚠ 即時受傷警示 ({sortedAlerts.length})
+        </span>
+        <button
+          type="button"
+          onClick={() => setCollapsed(true)}
+          className="flex items-center gap-0.5 rounded border border-slate-700 bg-slate-900 px-1.5 py-0.5 text-[10px] font-medium text-slate-200 hover:bg-slate-800 cursor-pointer"
+        >
+          ▲ 收起警示
+        </button>
+      </div>
+
       {visibleAlerts.map((alert) => {
         const isCrit = alert.severity === 'critical';
         return (
@@ -67,18 +106,18 @@ export function InjuryAlertOverlay() {
       {extraCount > 0 && (
         <button
           type="button"
-          onClick={() => setExpanded((v) => !v)}
+          onClick={() => setShowAll((v) => !v)}
           className="flex items-center gap-1 rounded-lg border border-red-500/40 bg-slate-950/85 px-2.5 py-1 text-[10px] font-semibold text-red-200 shadow backdrop-blur-md hover:bg-slate-900 cursor-pointer"
         >
-          {expanded ? (
+          {showAll ? (
             <>
               <ChevronUp className="h-3 w-3" />
-              收合警示
+              顯示前 2 則
             </>
           ) : (
             <>
               <ChevronDown className="h-3 w-3" />
-              +{extraCount} 則警示
+              +{extraCount} 則
             </>
           )}
         </button>

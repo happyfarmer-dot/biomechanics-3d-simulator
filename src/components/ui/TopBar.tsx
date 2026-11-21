@@ -22,6 +22,7 @@ export function TopBar() {
   const setInteractionMode = useSimStore((s) => s.setInteractionMode);
   const alerts = useSimStore((s) => s.alerts);
   const modelStatus = useSimStore((s) => s.modelStatus);
+  const integrityReport = useSimStore((s) => s.integrityReport);
   const lumbarCompression = useSimStore(
     (s) => s.loads.lumbar?.lumbarEstimatedCompressionN ?? 0
   );
@@ -118,9 +119,9 @@ export function TopBar() {
             <Info className="h-3.5 w-3.5" />
             <span
               className={`absolute -right-0.5 -top-0.5 h-2 w-2 rounded-full ${
-                modelStatus.state === 'loaded'
+                modelStatus.state === 'loaded' && integrityReport?.allPassed !== false
                   ? 'bg-emerald-400'
-                  : modelStatus.state === 'error'
+                  : modelStatus.state === 'error' || integrityReport?.allPassed === false
                   ? 'bg-red-500'
                   : 'bg-slate-400'
               }`}
@@ -129,7 +130,7 @@ export function TopBar() {
         </div>
       </header>
 
-      {/* 模型狀態與免責聲明彈窗 */}
+      {/* 模型狀態、自檢報告與免責聲明彈窗 */}
       {showInfo && (
         <div
           className="fixed inset-0 z-50 flex items-center justify-center bg-black/60 p-4 backdrop-blur-sm"
@@ -140,7 +141,7 @@ export function TopBar() {
             onClick={(e) => e.stopPropagation()}
           >
             <div className="flex items-center justify-between font-semibold text-slate-100">
-              <span>模型狀態與系統說明</span>
+              <span>模型狀態與自動化自檢報告</span>
               <button
                 type="button"
                 onClick={() => setShowInfo(false)}
@@ -160,13 +161,46 @@ export function TopBar() {
               }`}
             >
               {modelStatus.state === 'loaded'
-                ? '模型狀態：真實解剖網格（已載入 275 骨骼 + 478 肌群）'
+                ? '模型狀態：真實解剖網格（雙四元數蒙皮已啟用）'
                 : modelStatus.state === 'error'
                 ? `未找到解剖模型（原因：${modelStatus.message ?? '載入失敗'}）`
                 : '模型狀態：載入中...'}
             </div>
 
-            <p className="leading-relaxed text-slate-400">
+            {integrityReport && (
+              <div className="space-y-1.5 rounded-lg border border-slate-800 bg-slate-900/70 p-2.5">
+                <div className="flex items-center justify-between text-[11px] font-semibold">
+                  <span>起止點附著與關節連動自我檢查</span>
+                  <span
+                    className={
+                      integrityReport.allPassed ? 'text-emerald-400' : 'text-red-400'
+                    }
+                  >
+                    {integrityReport.allPassed ? '全部通過' : '發現異常'}
+                  </span>
+                </div>
+                {integrityReport.checks.map((c) => (
+                  <div
+                    key={c.id}
+                    className="rounded border border-slate-800 bg-slate-950/80 p-1.5 text-[10px]"
+                  >
+                    <div className="flex items-center justify-between font-medium">
+                      <span className="text-slate-200">{c.title}</span>
+                      <span
+                        className={
+                          c.passed ? 'text-emerald-400 font-semibold' : 'text-red-400 font-semibold'
+                        }
+                      >
+                        {c.passed ? '通過' : '未通過'}
+                      </span>
+                    </div>
+                    <div className="mt-0.5 text-slate-400 leading-snug">{c.detail}</div>
+                  </div>
+                ))}
+              </div>
+            )}
+
+            <p className="leading-relaxed text-slate-400 text-[11px]">
               本系統為靜力學與活動度簡化教學模型，韌帶負荷為方向性受力估算，非臨床醫療診斷或有限元素分析。
             </p>
           </div>

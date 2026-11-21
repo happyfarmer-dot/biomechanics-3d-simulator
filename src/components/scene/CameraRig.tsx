@@ -1,13 +1,44 @@
 import { CameraControls } from '@react-three/drei';
+import { useFrame, useThree } from '@react-three/fiber';
 import { useEffect, useRef } from 'react';
+import { Vector3 } from 'three';
 import { useSimStore } from '../../store/useSimStore';
+
+const _right = new Vector3();
+const _up = new Vector3();
+const _forward = new Vector3();
 
 export function CameraRig() {
   const controlsRef = useRef<CameraControls>(null);
+  const { camera } = useThree();
   const focusedJointId = useSimStore((s) => s.focusedJointId);
   const setFocusedJoint = useSimStore((s) => s.setFocusedJoint);
   const isDraggingGizmo = useSimStore((s) => s.isDraggingGizmo);
   const kinematics = useSimStore((s) => s.kinematics);
+  const setCameraVectors = useSimStore((s) => s.setCameraVectors);
+
+  const lastRightXRef = useRef(1);
+  const lastRightZRef = useRef(0);
+
+  // Sync camera right/up/forward vectors to store whenever camera rotates
+  useFrame(() => {
+    _right.set(1, 0, 0).applyQuaternion(camera.quaternion).normalize();
+    _up.set(0, 1, 0).applyQuaternion(camera.quaternion).normalize();
+    _forward.set(0, 0, -1).applyQuaternion(camera.quaternion).normalize();
+
+    if (
+      Math.abs(_right.x - lastRightXRef.current) > 0.015 ||
+      Math.abs(_right.z - lastRightZRef.current) > 0.015
+    ) {
+      lastRightXRef.current = _right.x;
+      lastRightZRef.current = _right.z;
+      setCameraVectors({
+        right: [_right.x, _right.y, _right.z],
+        up: [_up.x, _up.y, _up.z],
+        forward: [_forward.x, _forward.y, _forward.z],
+      });
+    }
+  });
 
   // Esc key exits macro focus back to full-body view
   useEffect(() => {
@@ -34,7 +65,6 @@ export function CameraRig() {
     if (!j) return;
     const [tx, ty, tz] = j.worldPosition;
 
-    // Oblique-anterior 0.55m offset, mirrored slightly for L/R limbs
     const sideSign = focusedJointId.endsWith('_L') ? 1 : focusedJointId.endsWith('_R') ? -1 : 0.35;
     const camX = tx + sideSign * 0.24;
     const camY = ty + 0.08;

@@ -15,7 +15,12 @@ import {
   Trash2,
 } from 'lucide-react';
 import { useState } from 'react';
-import { GRAVITY_MPS2, JOINT_ORDER, SKELETON_CONFIG } from '../../data/skeletonConfig';
+import {
+  getJointSliderLimits,
+  GRAVITY_MPS2,
+  JOINT_ORDER,
+  SKELETON_CONFIG,
+} from '../../data/skeletonConfig';
 import { getForceMagnitudeN } from '../../engine/staticsEngine';
 import { useSimStore } from '../../store/useSimStore';
 import type { AnatomicalAngles, ForceScaleNpm, JointId } from '../../types/biomechanics';
@@ -25,12 +30,10 @@ type TabKey = 'joints' | 'forces' | 'risks';
 const AXIS_META: Array<{
   key: keyof AnatomicalAngles;
   label: string;
-  min: number;
-  max: number;
 }> = [
-  { key: 'flexion', label: '屈曲 / 伸展', min: -90, max: 180 },
-  { key: 'abduction', label: '外展 / 內收', min: -60, max: 180 },
-  { key: 'rotation', label: '軸向旋轉', min: -100, max: 100 },
+  { key: 'flexion', label: '屈曲 / 伸展' },
+  { key: 'abduction', label: '外展 / 內收' },
+  { key: 'rotation', label: '軸向旋轉' },
 ];
 
 export function InspectorPanel() {
@@ -112,9 +115,10 @@ export function InspectorPanel() {
           </div>
 
           <div className="space-y-2.5 rounded-xl border border-slate-800 bg-slate-900/50 p-2.5">
-            {AXIS_META.map(({ key, label, min, max }) => {
+            {AXIS_META.map(({ key, label }) => {
               const val = jointAngles[key];
               const [romMin, romMax] = jointCfg.romLimits[key];
+              const [sliderMin, sliderMax] = getJointSliderLimits(selectedJoint)[key];
               const outOfRom = val < romMin || val > romMax;
               return (
                 <div key={key} className="space-y-0.5">
@@ -130,8 +134,8 @@ export function InspectorPanel() {
                   </div>
                   <input
                     type="range"
-                    min={min}
-                    max={max}
+                    min={sliderMin}
+                    max={sliderMax}
                     step={0.5}
                     value={val}
                     onChange={(e) =>

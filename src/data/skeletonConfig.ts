@@ -251,3 +251,39 @@ export function createNeutralPose(): PoseMap {
     ankle_R: { flexion: 0, abduction: 0, rotation: 0 },
   };
 }
+
+/**
+ * Reasonable injury limit bounds for UI sliders & camera-relative joystick.
+ * Allows exceeding AAOS safe limits to trigger injury alerts without 180-deg mesh tearing.
+ */
+export function getJointSliderLimits(jointId: JointId): {
+  flexion: [number, number];
+  abduction: [number, number];
+  rotation: [number, number];
+} {
+  if (jointId.startsWith('knee_')) {
+    return { flexion: [-15, 155], abduction: [-35, 35], rotation: [-40, 40] };
+  }
+  if (jointId.startsWith('hip_')) {
+    return { flexion: [-45, 135], abduction: [-45, 75], rotation: [-55, 55] };
+  }
+  if (jointId.startsWith('elbow_')) {
+    return { flexion: [-10, 155], abduction: [-30, 30], rotation: [-95, 95] };
+  }
+  if (jointId.startsWith('wrist_')) {
+    return { flexion: [-85, 85], abduction: [-45, 55], rotation: [-35, 35] };
+  }
+  if (jointId.startsWith('ankle_')) {
+    return { flexion: [-35, 65], abduction: [-35, 45], rotation: [-35, 35] };
+  }
+  if (jointId.startsWith('shoulder_')) {
+    return { flexion: [-65, 180], abduction: [-45, 180], rotation: [-100, 90] };
+  }
+  const rom = SKELETON_CONFIG[jointId].romLimits;
+  return {
+    flexion: [rom.flexion[0] - 15, rom.flexion[1] + 20],
+    abduction: [rom.abduction[0] - 15, rom.abduction[1] + 15],
+    rotation: [rom.rotation[0] - 15, rom.rotation[1] + 15],
+  };
+}
+

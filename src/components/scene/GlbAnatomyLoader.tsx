@@ -14,6 +14,7 @@ import {
   updateSkinnedMuscleVertices,
   type SkinnedMuscleData,
 } from '../../engine/muscleSkinning';
+import { runRigIntegrityCheck } from '../../engine/rigIntegrityCheck';
 import { useSimStore } from '../../store/useSimStore';
 import type { JointId, RiskSeverity, Vec3 } from '../../types/biomechanics';
 import {
@@ -74,6 +75,7 @@ function RealAnatomyModel({
   const interactionMode = useSimStore((s) => s.interactionMode);
   const setModelStatus = useSimStore((s) => s.setModelStatus);
   const setCalibratedOffsets = useSimStore((s) => s.setCalibratedOffsets);
+  const setIntegrityReport = useSimStore((s) => s.setIntegrityReport);
   const placeForceAtPoint = useSimStore((s) => s.placeForceAtPoint);
 
   // Step 1: Calibrate real anatomical joint centers from GLB bone bounding boxes
@@ -94,6 +96,24 @@ function RealAnatomyModel({
 
     scene.traverse((obj) => {
       if (!(obj instanceof Mesh)) return;
+      if (obj.scale.x < 0 || obj.scale.y < 0 || obj.scale.z < 0) {
+        const sx = obj.scale.x < 0 ? -1 : 1;
+        const sy = obj.scale.y < 0 ? -1 : 1;
+        const sz = obj.scale.z < 0 ? -1 : 1;
+        obj.geometry = obj.geometry.clone();
+        obj.geometry.scale(sx, sy, sz);
+        if (sx * sy * sz < 0 && obj.geometry.index) {
+          const idx = obj.geometry.index.array;
+          for (let i = 0; i < idx.length; i += 3) {
+            const tmp = idx[i + 1];
+            idx[i + 1] = idx[i + 2];
+            idx[i + 2] = tmp;
+          }
+          obj.geometry.index.needsUpdate = true;
+        }
+        obj.geometry.computeVertexNormals();
+        obj.scale.set(Math.abs(obj.scale.x), Math.abs(obj.scale.y), Math.abs(obj.scale.z));
+      }
       const nl = obj.name.toLowerCase();
       const zone = classifyMeshZone(obj, calibration);
 
@@ -139,13 +159,27 @@ function RealAnatomyModel({
     onReady(ok);
     if (ok) {
       setModelStatus({ state: 'loaded' });
+      const report = runRigIntegrityCheck(
+        muscleBindings.map((m) => m.skinned),
+        unassignedMeshCount,
+        calibration
+      );
+      setIntegrityReport(report);
     } else {
       setModelStatus({ state: 'error', message: '模型中無有效網格' });
     }
     return () => onReady(false);
-  }, [boneBindings.length, muscleBindings.length, unassignedMeshCount, onReady, setModelStatus]);
+  }, [
+    boneBindings.length,
+    muscleBindings,
+    unassignedMeshCount,
+    calibration,
+    onReady,
+    setModelStatus,
+    setIntegrityReport,
+  ]);
 
-  // Step 3: Update only muscles whose used joints changed
+  // Step 3: Update only muscles whose used joints changed via DQS
   const prevJointSigRef = useMemo(() => new Map<number, string>(), []);
   const stretchRatios = useMemo(() => {
     const ratios = new Array<number>(muscleBindings.length);
@@ -158,13 +192,18 @@ function RealAnatomyModel({
       }
       if (prevJointSigRef.get(i) !== sig) {
         prevJointSigRef.set(i, sig);
-        ratios[i] = updateSkinnedMuscleVertices(m.skinned, kinematics, heightM);
+        ratios[i] = updateSkinnedMuscleVertices(
+          m.skinned,
+          kinematics,
+          heightM,
+          calibration.restPositions
+        );
       } else {
         ratios[i] = 1;
       }
     }
     return ratios;
-  }, [muscleBindings, kinematics, heightM, prevJointSigRef]);
+  }, [muscleBindings, kinematics, heightM, calibration.restPositions, prevJointSigRef]);
 
   const activeMacroSet = useMemo(() => {
     if (!focusedJointId) return null;

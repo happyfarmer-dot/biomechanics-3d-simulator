@@ -4,10 +4,12 @@ import {
   createNeutralPose,
   DEFAULT_HEIGHT_M,
   DEFAULT_MASS_KG,
+  getJointSliderLimits,
 } from '../data/skeletonConfig';
 import { computeKinematics } from '../engine/kinematics';
 import { mapJointSoftTissueLoads } from '../engine/ligamentLoadMapper';
 import { evaluateMuscles } from '../engine/muscleEvaluator';
+import type { RigIntegrityReport } from '../engine/rigIntegrityCheck';
 import { evaluateAllInjuries, getJointRiskMap } from '../engine/romEvaluator';
 import { computeStatics } from '../engine/staticsEngine';
 import type {
@@ -26,6 +28,12 @@ import type {
   Vec3,
 } from '../types/biomechanics';
 
+export interface CameraVectors {
+  right: Vec3;
+  up: Vec3;
+  forward: Vec3;
+}
+
 interface SimState {
   pose: PoseMap;
   selectedJoint: JointId | null;
@@ -42,6 +50,8 @@ interface SimState {
   activePresetId: string | null;
   modelStatus: { state: 'loading' | 'loaded' | 'error'; message?: string };
   calibratedOffsets: Record<JointId, Vec3> | null;
+  integrityReport: RigIntegrityReport | null;
+  cameraVectors: CameraVectors;
 
   // Derived simulation outputs
   kinematics: KinematicsResult;
@@ -54,6 +64,8 @@ interface SimState {
   // Actions
   setModelStatus: (status: { state: 'loading' | 'loaded' | 'error'; message?: string }) => void;
   setCalibratedOffsets: (offsets: Record<JointId, Vec3> | null) => void;
+  setIntegrityReport: (report: RigIntegrityReport | null) => void;
+  setCameraVectors: (vecs: CameraVectors) => void;
   setUseTouchPad: (use: boolean) => void;
   setSelectedJoint: (jointId: JointId | null) => void;
   setFocusedJoint: (jointId: JointId | null) => void;
@@ -134,9 +146,17 @@ export const useSimStore = create<SimState>((set, get) => ({
   activePresetId: 'neutral_standing',
   modelStatus: { state: 'loading' },
   calibratedOffsets: null,
+  integrityReport: null,
+  cameraVectors: {
+    right: [1, 0, 0],
+    up: [0, 1, 0],
+    forward: [0, 0, -1],
+  },
   ...initialDerived,
 
   setModelStatus: (modelStatus) => set({ modelStatus }),
+  setIntegrityReport: (integrityReport) => set({ integrityReport }),
+  setCameraVectors: (cameraVectors) => set({ cameraVectors }),
   setUseTouchPad: (useTouchPad) => set({ useTouchPad }),
 
   setCalibratedOffsets: (calibratedOffsets) => {
@@ -182,12 +202,20 @@ export const useSimStore = create<SimState>((set, get) => ({
 
   setJointAngles: (jointId, patch) => {
     const s = get();
+    const cur = s.pose[jointId];
+    const limits = getJointSliderLimits(jointId);
+    const clampVal = (v: number, [min, max]: [number, number]) =>
+      Math.max(min, Math.min(max, v));
+
+    const nextAngles: AnatomicalAngles = {
+      flexion: clampVal(patch.flexion ?? cur.flexion, limits.flexion),
+      abduction: clampVal(patch.abduction ?? cur.abduction, limits.abduction),
+      rotation: clampVal(patch.rotation ?? cur.rotation, limits.rotation),
+    };
+
     const nextPose: PoseMap = {
       ...s.pose,
-      [jointId]: {
-        ...s.pose[jointId],
-        ...patch,
-      },
+      [jointId]: nextAngles,
     };
     const derived = evaluateAll(
       nextPose,

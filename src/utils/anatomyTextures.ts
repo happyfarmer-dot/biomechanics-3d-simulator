@@ -66,13 +66,15 @@ export function getMuscleTextures(): TextureSet {
 
       const fiberHeight = majorBundles * 0.55 + fineFibers * 0.3 + grain * 0.15;
 
-      const mR = 115 + fiberHeight * 88;
-      const mG = 16 + fiberHeight * 28;
-      const mB = 22 + fiberHeight * 24;
+      // Medical Atlas terracotta / ochre red (#8f3d37 base: R~143, G~61, B~55)
+      const mR = 122 + fiberHeight * 38;
+      const mG = 48 + fiberHeight * 22;
+      const mB = 43 + fiberHeight * 20;
 
-      const tR = 218 + fiberHeight * 28;
-      const tG = 213 + fiberHeight * 28;
-      const tB = 202 + fiberHeight * 26;
+      // Soft warm beige tendon (#d9d3c7: R~217, G~211, B~199)
+      const tR = 205 + fiberHeight * 18;
+      const tG = 199 + fiberHeight * 18;
+      const tB = 187 + fiberHeight * 18;
 
       const idx = (y * size + x) * 4;
       aImg.data[idx] = Math.min(255, mR * muscleMask + tR * (1 - muscleMask));
@@ -87,8 +89,8 @@ export function getMuscleTextures(): TextureSet {
       bImg.data[idx + 3] = 255;
 
       const rough =
-        muscleMask * (0.36 + (1 - fiberHeight) * 0.14) +
-        (1 - muscleMask) * (0.26 + (1 - fiberHeight) * 0.08);
+        muscleMask * (0.52 + (1 - fiberHeight) * 0.12) +
+        (1 - muscleMask) * (0.42 + (1 - fiberHeight) * 0.08);
       const roughVal = Math.floor(rough * 255);
       rImg.data[idx] = roughVal;
       rImg.data[idx + 1] = roughVal;
@@ -280,18 +282,18 @@ export function getMuscleMaterial(
 
   const tex = getMuscleTextures();
   const emissive =
-    status === 'critical' ? '#ef4444' : status === 'warning' ? '#eab308' : '#000000';
+    status === 'critical' ? '#dc2626' : status === 'warning' ? '#d97706' : '#000000';
   const emissiveIntensity =
-    status === 'critical' ? 0.78 : status === 'warning' ? 0.42 : 0;
+    status === 'critical' ? 0.4 : status === 'warning' ? 0.3 : 0;
 
   const mat = new MeshStandardMaterial({
     map: tex.albedoMap,
     bumpMap: tex.bumpMap,
-    bumpScale: 0.004,
+    bumpScale: 0.003,
     roughnessMap: tex.roughnessMap,
-    roughness: 0.35,
-    metalness: 0.05,
-    envMapIntensity: 0.9,
+    roughness: 0.58,
+    metalness: 0.0,
+    envMapIntensity: 0.45,
     emissive,
     emissiveIntensity,
     transparent: isGhosted,
@@ -342,10 +344,6 @@ function createFresnelMaterial(maxAlpha: number): ShaderMaterial {
   });
 }
 
-/**
- * Fresnel Rim ShaderMaterial for outer skin contour:
- * 0.02 alpha at perpendicular center, smoothly rising to 0.35 at grazing silhouette edges.
- */
 export function getSkinFresnelMaterial(isGhosted: boolean): ShaderMaterial {
   if (isGhosted) {
     if (!matSkinFresnelGhost) {
@@ -367,10 +365,10 @@ export function getZAnatomyBoneMaterial(isGhosted: boolean): MeshStandardMateria
   if (isGhosted) {
     if (!matZBoneGhost) {
       matZBoneGhost = new MeshStandardMaterial({
-        color: '#ede6d6',
+        color: '#e8e2d5',
         metalness: 0.0,
-        roughness: 0.55,
-        envMapIntensity: 0.7,
+        roughness: 0.56,
+        envMapIntensity: 0.5,
         transparent: true,
         opacity: 0.12,
         depthWrite: false,
@@ -380,10 +378,10 @@ export function getZAnatomyBoneMaterial(isGhosted: boolean): MeshStandardMateria
   }
   if (!matZBoneSolid) {
     matZBoneSolid = new MeshStandardMaterial({
-      color: '#ede6d6',
+      color: '#e8e2d5',
       metalness: 0.0,
-      roughness: 0.55,
-      envMapIntensity: 0.75,
+      roughness: 0.56,
+      envMapIntensity: 0.55,
     });
   }
   return matZBoneSolid;
@@ -399,17 +397,17 @@ export function getZAnatomyMuscleMaterial(
 
   const tex = getMuscleTextures();
   const emissive =
-    status === 'critical' ? '#ef4444' : status === 'warning' ? '#eab308' : '#000000';
+    status === 'critical' ? '#dc2626' : status === 'warning' ? '#d97706' : '#000000';
   const emissiveIntensity =
-    status === 'critical' ? 0.8 : status === 'warning' ? 0.45 : 0;
+    status === 'critical' ? 0.4 : status === 'warning' ? 0.3 : 0;
 
   const mat = new MeshStandardMaterial({
-    color: '#a82020',
+    color: '#8f3d37',
     bumpMap: tex.bumpMap,
-    bumpScale: 0.004,
+    bumpScale: 0.003,
     metalness: 0.0,
-    roughness: 0.42,
-    envMapIntensity: 0.85,
+    roughness: 0.58,
+    envMapIntensity: 0.45,
     side: DoubleSide,
     emissive,
     emissiveIntensity,
