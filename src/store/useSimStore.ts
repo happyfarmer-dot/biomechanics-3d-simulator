@@ -47,6 +47,7 @@ interface SimState {
   layers: LayerVisibility;
   isDraggingGizmo: boolean;
   useTouchPad: boolean;
+  showJointHandles: boolean;
   activePresetId: string | null;
   modelStatus: { state: 'loading' | 'loaded' | 'error'; message?: string };
   calibratedOffsets: Record<JointId, Vec3> | null;
@@ -67,6 +68,8 @@ interface SimState {
   setIntegrityReport: (report: RigIntegrityReport | null) => void;
   setCameraVectors: (vecs: CameraVectors) => void;
   setUseTouchPad: (use: boolean) => void;
+  setShowJointHandles: (show: boolean) => void;
+  selectNearestJointAtPoint: (worldPoint: Vec3) => void;
   setSelectedJoint: (jointId: JointId | null) => void;
   setFocusedJoint: (jointId: JointId | null) => void;
   setInteractionMode: (mode: InteractionMode) => void;
@@ -143,6 +146,7 @@ export const useSimStore = create<SimState>((set, get) => ({
   },
   isDraggingGizmo: false,
   useTouchPad: true,
+  showJointHandles: false,
   activePresetId: 'neutral_standing',
   modelStatus: { state: 'loading' },
   calibratedOffsets: null,
@@ -158,6 +162,40 @@ export const useSimStore = create<SimState>((set, get) => ({
   setIntegrityReport: (integrityReport) => set({ integrityReport }),
   setCameraVectors: (cameraVectors) => set({ cameraVectors }),
   setUseTouchPad: (useTouchPad) => set({ useTouchPad }),
+  setShowJointHandles: (showJointHandles) => set({ showJointHandles }),
+
+  selectNearestJointAtPoint: (worldPoint) => {
+    const s = get();
+    const CONTROL_JOINTS: JointId[] = [
+      'pelvis', 'lumbar', 'neck',
+      'shoulder_L', 'elbow_L', 'wrist_L',
+      'shoulder_R', 'elbow_R', 'wrist_R',
+      'hip_L', 'knee_L', 'ankle_L',
+      'hip_R', 'knee_R', 'ankle_R',
+    ];
+    let bestJoint: JointId = s.selectedJoint ?? 'knee_R';
+    let bestDistSq = Infinity;
+    for (const jId of CONTROL_JOINTS) {
+      const jp = s.kinematics.joints[jId].worldPosition;
+      const dx = jp[0] - worldPoint[0];
+      const dy = jp[1] - worldPoint[1];
+      const dz = jp[2] - worldPoint[2];
+      const dSq = dx * dx + dy * dy + dz * dz;
+      if (dSq < bestDistSq) {
+        bestDistSq = dSq;
+        bestJoint = jId;
+      }
+    }
+    const macroJoint = s.focusedJointId ?? bestJoint;
+    const focusedSoftTissues = macroJoint
+      ? mapJointSoftTissueLoads(macroJoint, s.pose, s.loads)
+      : [];
+    set({
+      showJointHandles: true,
+      selectedJoint: bestJoint,
+      focusedSoftTissues,
+    });
+  },
 
   setCalibratedOffsets: (calibratedOffsets) => {
     const s = get();

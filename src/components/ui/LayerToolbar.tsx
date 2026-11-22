@@ -40,6 +40,8 @@ export function LayerToolbar() {
   const setIncludeGravity = useSimStore((s) => s.setIncludeGravity);
   const useTouchPad = useSimStore((s) => s.useTouchPad);
   const setUseTouchPad = useSimStore((s) => s.setUseTouchPad);
+  const showJointHandles = useSimStore((s) => s.showJointHandles);
+  const setShowJointHandles = useSimStore((s) => s.setShowJointHandles);
 
   useEffect(() => {
     if (!expanded) return;
@@ -99,6 +101,16 @@ export function LayerToolbar() {
           </div>
 
           <div className="border-t border-slate-800 pt-2 space-y-2">
+            <label className="flex items-center justify-between text-[11px] text-slate-300 cursor-pointer">
+              <span>顯示關節球</span>
+              <input
+                type="checkbox"
+                checked={showJointHandles}
+                onChange={(e) => setShowJointHandles(e.target.checked)}
+                className="h-3.5 w-3.5 accent-sky-500 cursor-pointer"
+              />
+            </label>
+
             <label className="flex items-center justify-between text-[11px] text-slate-300 cursor-pointer">
               <span>指尖雙軸羅盤</span>
               <input

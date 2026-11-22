@@ -97,11 +97,28 @@ export const COMPOSITE_POSTURE_RULES: CompositeRuleDef[] = [
     id: 'lumbar_disc_herniation',
     title: '腰椎間盤突出高風險',
     tissue: '腰椎間盤後外側纖維環、後縱韌帶',
-    mechanism: '腰椎屈曲 > 35° 使髓核向後推擠纖維環，若同時疊加軸向旋轉 > 12°，斜向纖維環將承受雙倍剪切應力。',
-    recommendation: '搬運重物時改用髖關節鉸鏈取代彎腰，保持腰椎中立位，並以雙腳轉向代替軀幹扭轉。',
+    mechanism: '腰椎與骨盆前傾複合屈曲 > 35° 使髓核向後推擠纖維環，若同時疊加軸向旋轉 > 12°，斜向纖維環將承受雙倍剪切應力。',
+    recommendation: '搬運重物時改用髖關節鉸鏈取代彎腰，保持腰椎與骨盆中立位，並以雙腳轉向代替軀幹扭轉。',
     check: (pose) => {
       const a = pose.lumbar;
-      if (a.flexion > 35 && Math.abs(a.rotation) > 12) return ['lumbar'];
+      const p = pose.pelvis;
+      const effectiveFlex = a.flexion + Math.max(0, p.flexion * 0.5);
+      const effectiveRot = Math.abs(a.rotation) + Math.abs(p.rotation * 0.5);
+      if (effectiveFlex > 35 && effectiveRot > 12) return ['lumbar'];
+      return [];
+    },
+  },
+  {
+    id: 'pelvic_tilt_lumbar_hip_stress',
+    title: '極端骨盆傾角導致腰薦與髖盂唇代償負荷',
+    tissue: '腰薦關節 (L5–S1) 小面關節、雙側髖關節前盂唇',
+    mechanism: '骨盆過度前傾（> 22°）或後傾（< -20°）在雙腳著地閉鎖鏈下，直接對腰椎下段與雙側髖關節施加反向剪切與撞擊負荷。',
+    recommendation: '收緊腹橫肌與臀肌維持骨盆中立傾角（-10° 至 +15° 內），避免骨盆過度前傾或後傾鎖死。',
+    check: (pose) => {
+      const p = pose.pelvis;
+      if (p.flexion > 22 || p.flexion < -20 || Math.abs(p.abduction) > 20) {
+        return ['lumbar', 'hip_L', 'hip_R'];
+      }
       return [];
     },
   },

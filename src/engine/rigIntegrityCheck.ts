@@ -302,12 +302,149 @@ export function runRigIntegrityCheck(
     }
   }
 
-  // Restore neutral pose vertices after testing
+  // --- Check 4: Bilateral Joint Mirror Symmetry & Axial Centerline (X = 0.0) ---
+  const SYMMETRY_PAIRS: Array<[string, [number, number, number], [number, number, number]]> = [
+    ['shoulder', restJoints.shoulder_L, restJoints.shoulder_R],
+    ['elbow', restJoints.elbow_L, restJoints.elbow_R],
+    ['wrist', restJoints.wrist_L, restJoints.wrist_R],
+    ['hip', restJoints.hip_L, restJoints.hip_R],
+    ['knee', restJoints.knee_L, restJoints.knee_R],
+    ['ankle', restJoints.ankle_L, restJoints.ankle_R],
+  ];
+  let maxSymXErr = 0;
+  let maxSymYErr = 0;
+  for (const [, posL, posR] of SYMMETRY_PAIRS) {
+    const errX = Math.abs(posL[0] + posR[0]);
+    const errY = Math.abs(posL[1] - posR[1]);
+    if (errX > maxSymXErr) maxSymXErr = errX;
+    if (errY > maxSymYErr) maxSymYErr = errY;
+  }
+  const AXIAL_JOINTS = [
+    restJoints.pelvis,
+    restJoints.lumbar,
+    restJoints.thorax,
+    restJoints.neck,
+    restJoints.head,
+  ];
+  for (const posA of AXIAL_JOINTS) {
+    const errX = Math.abs(posA[0]);
+    if (errX > maxSymXErr) maxSymXErr = errX;
+  }
+  const check4Pass = maxSymXErr < 0.005 && maxSymYErr < 0.005;
+  const check4: IntegrityCheckItem = {
+    id: 'bilateral_symmetry',
+    title: '左右關節鏡像對稱與中軸置中檢查',
+    passed: check4Pass,
+    detail: `最大 X 對稱誤差: ${(maxSymXErr * 1000).toFixed(2)} mm · 最大 Y 高度誤差: ${(maxSymYErr * 1000).toFixed(2)} mm (上限 < 5.0 mm)`,
+  };
+
+  // --- Check 5: Right Wrist Continuity Check (flexion 45°, abduction 30° -> gap change < 0.015m) ---
+  const wristRPose = withPose({
+    wrist_R: { flexion: 45, abduction: 30, rotation: 0 },
+  });
+  const wristRKin = computeKinematics(wristRPose, DEFAULT_HEIGHT_M, calibration.offsets);
+  const wrRest = restJoints.wrist_R;
+  const wrWorld = wristRKin.joints.wrist_R.worldPosition;
+  // Pivot displacement of wrist_R itself relative to forearm distal end
+  let maxWristRProximalDrift = Math.hypot(
+    wrWorld[0] - wrRest[0],
+    wrWorld[1] - wrRest[1],
+    wrWorld[2] - wrRest[2]
+  );
+
+  // Measure proximal hand vertices vs distal forearm vertices around wrist_R (within ±2cm of wrRest.y)
+  for (const m of muscles) {
+    if (m.zone !== 'arm_R') continue;
+    updateSkinnedMuscleVertices(m, wristRKin, DEFAULT_HEIGHT_M, restJoints);
+    const posAttr = m.geometry.getAttribute('position');
+    for (let i = 0; i < m.vertexCount; i++) {
+      const i3 = i * 3;
+      const rx = m.restPositions[i3];
+      const ry = m.restPositions[i3 + 1];
+      const rz = m.restPositions[i3 + 2];
+      // Proximal wrist boundary vertices right at the radiocarpal joint (|ry - wrRest.y| < 0.01m)
+      if (Math.abs(ry - wrRest[1]) < 0.01 && Math.hypot(rx - wrRest[0], rz - wrRest[2]) < 0.035) {
+        const px = posAttr.getX(i);
+        const py = posAttr.getY(i);
+        const pz = posAttr.getZ(i);
+        const restDistToPivot = Math.hypot(rx - wrRest[0], ry - wrRest[1], rz - wrRest[2]);
+        const curDistToPivot = Math.hypot(px - wrWorld[0], py - wrWorld[1], pz - wrWorld[2]);
+        const gapDiff = Math.abs(curDistToPivot - restDistToPivot);
+        if (gapDiff > maxWristRProximalDrift) {
+          maxWristRProximalDrift = gapDiff;
+        }
+      }
+    }
+  }
+  const check5Pass = maxWristRProximalDrift < 0.015;
+  const check5: IntegrityCheckItem = {
+    id: 'right_wrist_continuity',
+    title: '右腕旋轉連續性檢查（屈曲 45° + 外展 30°）',
+    passed: check5Pass,
+    detail: `右手掌近端與右尺橈骨遠端距離變化: ${(maxWristRProximalDrift * 1000).toFixed(2)} mm (上限 < 15.0 mm)`,
+  };
+
+  // --- Check 6: Zero Cross-Limb Contamination & Grounded Feet Check ---
+  // (a) Rotate wrist_L (abduction 45°) & elbow_L (flexion 45°) -> all leg_L and foot sole vertices must move < 0.001m
+  const leftArmTestPose = withPose({
+    wrist_L: { flexion: 0, abduction: 45, rotation: 0 },
+    elbow_L: { flexion: 45, abduction: 0, rotation: 0 },
+  });
+  const leftArmKin = computeKinematics(leftArmTestPose, DEFAULT_HEIGHT_M, calibration.offsets);
+  let maxThighOrSoleContaminationM = 0;
+  let contaminatedMeshName = '';
+  const ankleLY = restJoints.ankle_L[1];
+
+  for (const m of muscles) {
+    const isLeftLegOrFoot = m.zone === 'leg_L' || m.zone === 'leg_R';
+    updateSkinnedMuscleVertices(m, leftArmKin, DEFAULT_HEIGHT_M, restJoints);
+    const posAttr = m.geometry.getAttribute('position');
+    const step = Math.max(1, Math.floor(m.vertexCount / 150));
+    for (let i = 0; i < m.vertexCount; i += step) {
+      const i3 = i * 3;
+      const rx = m.restPositions[i3];
+      const ry = m.restPositions[i3 + 1];
+      const rz = m.restPositions[i3 + 2];
+      const isFootSole = ry < ankleLY + 0.05;
+      if (!isLeftLegOrFoot && !isFootSole) continue;
+
+      const disp = Math.hypot(
+        posAttr.getX(i) - rx,
+        posAttr.getY(i) - ry,
+        posAttr.getZ(i) - rz
+      );
+      if (disp > maxThighOrSoleContaminationM) {
+        maxThighOrSoleContaminationM = disp;
+        contaminatedMeshName = m.name;
+      }
+    }
+  }
+
+  // (b) Rotate pelvis anterior tilt 20° -> ankle_L and ankle_R height change < 0.01m
   const neutralKin = computeKinematics(
     createNeutralPose(),
     DEFAULT_HEIGHT_M,
     calibration.offsets
   );
+  const pelvisTiltPose = withPose({
+    pelvis: { flexion: 20, abduction: 0, rotation: 0 },
+  });
+  const pelvisTiltKin = computeKinematics(
+    pelvisTiltPose,
+    DEFAULT_HEIGHT_M,
+    calibration.offsets
+  );
+  const ankleLDiffY = Math.abs(
+    pelvisTiltKin.joints.ankle_L.worldPosition[1] -
+      neutralKin.joints.ankle_L.worldPosition[1]
+  );
+  const ankleRDiffY = Math.abs(
+    pelvisTiltKin.joints.ankle_R.worldPosition[1] -
+      neutralKin.joints.ankle_R.worldPosition[1]
+  );
+  const maxAnkleHeightDiffM = Math.max(ankleLDiffY, ankleRDiffY);
+
+  // Restore neutral pose vertices after testing
   for (const m of muscles) {
     updateSkinnedMuscleVertices(m, neutralKin, DEFAULT_HEIGHT_M, restJoints);
   }
@@ -322,10 +459,29 @@ export function runRigIntegrityCheck(
     }`,
   };
 
-  const allPassed = check1Pass && check2Pass && check3Pass;
+  const check6Pass =
+    maxThighOrSoleContaminationM < 0.001 && maxAnkleHeightDiffM < 0.01;
+  const check6: IntegrityCheckItem = {
+    id: 'cross_limb_grounded',
+    title: '跨肢體零污染與骨盆前傾雙腳著地檢查',
+    passed: check6Pass,
+    detail: `左臂轉動時下肢/足底位移: ${(maxThighOrSoleContaminationM * 1000).toFixed(3)} mm (上限 < 1.0 mm)${
+      contaminatedMeshName && maxThighOrSoleContaminationM >= 0.001
+        ? ` [${contaminatedMeshName}]`
+        : ''
+    } · 骨盆前傾 20° 雙踝高度變化: ${(maxAnkleHeightDiffM * 1000).toFixed(2)} mm (上限 < 10.0 mm)`,
+  };
+
+  const allPassed =
+    check1Pass &&
+    check2Pass &&
+    check3Pass &&
+    check4Pass &&
+    check5Pass &&
+    check6Pass;
   const report: RigIntegrityReport = {
     allPassed,
-    checks: [check1, check2, check3],
+    checks: [check1, check2, check3, check4, check5, check6],
     timestamp: new Date().toLocaleTimeString('zh-TW', { hour12: false }),
   };
 

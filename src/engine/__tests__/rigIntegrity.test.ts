@@ -7,6 +7,7 @@ import { calibrateSkeletonFromScene } from '../calibrateSkeleton';
 import {
   classifyMeshZone,
   findNearestBoneJointInZone,
+  isMicroDebrisMesh,
   prepareAutoSkinnedMuscle,
 } from '../muscleSkinning';
 import { runRigIntegrityCheck } from '../rigIntegrityCheck';
@@ -126,13 +127,22 @@ describe('Real Z-Anatomy GLB RigIntegrityCheck (3 Automated Checks)', () => {
 
     scene.updateMatrixWorld(true);
     const calibration = calibrateSkeletonFromScene(scene);
+    console.log('--- CALIBRATED REST POSITIONS ---');
+    for (const [k, v] of Object.entries(calibration.restPositions)) {
+      console.log(`  ${k}: [${v.map((n) => n.toFixed(4)).join(', ')}]`);
+    }
 
     let unassigned = 0;
     const skinnedMuscles = [];
     let boneCount = 0;
+    let debrisCount = 0;
 
     scene.traverse((obj) => {
       if (!(obj instanceof Mesh)) return;
+      if (isMicroDebrisMesh(obj, calibration)) {
+        debrisCount++;
+        return;
+      }
       const nl = obj.name.toLowerCase();
       const zone = classifyMeshZone(obj, calibration);
       if (nl.startsWith('muscle__') || nl.includes('muscle')) {
@@ -144,14 +154,15 @@ describe('Real Z-Anatomy GLB RigIntegrityCheck (3 Automated Checks)', () => {
       }
     });
 
-    console.log(`Decoded ${boneCount} bones and ${skinnedMuscles.length} muscles from anatomy_rigged.glb`);
+    console.log(
+      `Decoded ${boneCount} bones, ${skinnedMuscles.length} muscles, hidden ${debrisCount} micro-debris from anatomy_rigged.glb`
+    );
     const report = runRigIntegrityCheck(skinnedMuscles, unassigned, calibration);
     for (const item of report.checks) {
       console.log(`[Check] ${item.id} (${item.title}): ${item.passed ? 'PASS' : 'FAIL'} -> ${item.detail}`);
+      expect(item.passed).toBe(true);
     }
-    expect(report.checks[0].passed).toBe(true);
-    expect(report.checks[1].passed).toBe(true);
-    expect(report.checks[2].passed).toBe(true);
+    expect(report.checks.length).toBe(6);
     expect(report.allPassed).toBe(true);
   }, 60000);
 });

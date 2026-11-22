@@ -481,11 +481,14 @@ export function HumanRig({ hideProceduralBones = false }: { hideProceduralBones?
   const selectedJoint = useSimStore((s) => s.selectedJoint);
   const focusedJointId = useSimStore((s) => s.focusedJointId);
   const interactionMode = useSimStore((s) => s.interactionMode);
+  const showJointHandles = useSimStore((s) => s.showJointHandles);
   const setSelectedJoint = useSimStore((s) => s.setSelectedJoint);
   const setFocusedJoint = useSimStore((s) => s.setFocusedJoint);
+  const selectNearestJointAtPoint = useSimStore((s) => s.selectNearestJointAtPoint);
   const layers = useSimStore((s) => s.layers);
   const jointRiskMap = useSimStore((s) => s.jointRiskMap);
   const heightM = useSimStore((s) => s.heightM);
+  const pointerDownRef = useRef<{ x: number; y: number } | null>(null);
 
   const scale = heightM / 1.75;
 
@@ -502,7 +505,7 @@ export function HumanRig({ hideProceduralBones = false }: { hideProceduralBones?
     return set;
   }, [focusedJointId]);
 
-  const showJointDots = interactionMode === 'pose' && !focusedJointId;
+  const showJointDots = showJointHandles && interactionMode === 'pose' && !focusedJointId;
   const MAIN_CONTROL_JOINTS = useMemo(
     () =>
       new Set<JointId>([
@@ -516,7 +519,22 @@ export function HumanRig({ hideProceduralBones = false }: { hideProceduralBones?
   );
 
   return (
-    <group name="human-rig">
+    <group
+      name="human-rig"
+      onPointerDown={(e) => {
+        pointerDownRef.current = { x: e.nativeEvent.clientX, y: e.nativeEvent.clientY };
+      }}
+      onClick={(e) => {
+        if (interactionMode !== 'pose') return;
+        const down = pointerDownRef.current;
+        if (down) {
+          const dist = Math.hypot(e.nativeEvent.clientX - down.x, e.nativeEvent.clientY - down.y);
+          if (dist >= 6) return;
+        }
+        e.stopPropagation();
+        selectNearestJointAtPoint([e.point.x, e.point.y, e.point.z]);
+      }}
+    >
       {JOINT_ORDER.map((id) => {
         const j = kinematics.joints[id];
         const cfg = SKELETON_CONFIG[id];

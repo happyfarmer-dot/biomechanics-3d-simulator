@@ -22,6 +22,8 @@ export function evaluateSingleAxisRom(pose: PoseMap): InjuryAlert[] {
   const alerts: InjuryAlert[] = [];
 
   for (const jointId of JOINT_ORDER) {
+    // Pelvis tilt is a closed-chain posture mapped to lumbar and hip stress rather than a raw root plank ROM alert
+    if (jointId === 'pelvis') continue;
     const cfg = SKELETON_CONFIG[jointId];
     const angles = pose[jointId];
     if (!angles) continue;

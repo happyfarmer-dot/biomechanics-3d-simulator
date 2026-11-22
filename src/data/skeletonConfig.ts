@@ -42,7 +42,7 @@ export const SKELETON_CONFIG: Record<JointId, JointConfig> = {
     massRatio: 0.14,
     comRatio: 0.5,
     boneRadius: 0.075,
-    romLimits: { flexion: [-30, 45], abduction: [-25, 25], rotation: [-30, 30] },
+    romLimits: { flexion: [-25, 30], abduction: [-25, 30], rotation: [-30, 30] },
   },
   lumbar: {
     id: 'lumbar',
@@ -275,6 +275,9 @@ export function getJointSliderLimits(jointId: JointId): {
   }
   if (jointId.startsWith('ankle_')) {
     return { flexion: [-35, 65], abduction: [-35, 45], rotation: [-35, 35] };
+  }
+  if (jointId === 'pelvis') {
+    return { flexion: [-25, 30], abduction: [-25, 30], rotation: [-30, 30] };
   }
   if (jointId.startsWith('shoulder_')) {
     return { flexion: [-65, 180], abduction: [-45, 180], rotation: [-100, 90] };

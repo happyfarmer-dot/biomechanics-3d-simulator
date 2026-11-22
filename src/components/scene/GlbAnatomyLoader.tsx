@@ -10,6 +10,7 @@ import { calibrateSkeletonFromScene } from '../../engine/calibrateSkeleton';
 import {
   classifyMeshZone,
   findNearestBoneJointInZone,
+  isMicroDebrisMesh,
   prepareAutoSkinnedMuscle,
   updateSkinnedMuscleVertices,
   type SkinnedMuscleData,
@@ -77,23 +78,12 @@ function RealAnatomyModel({
   const setCalibratedOffsets = useSimStore((s) => s.setCalibratedOffsets);
   const setIntegrityReport = useSimStore((s) => s.setIntegrityReport);
   const placeForceAtPoint = useSimStore((s) => s.placeForceAtPoint);
+  const selectNearestJointAtPoint = useSimStore((s) => s.selectNearestJointAtPoint);
+  const [pointerDownPos, setPointerDownPos] = useState<{ x: number; y: number } | null>(null);
 
-  // Step 1: Calibrate real anatomical joint centers from GLB bone bounding boxes
-  const calibration = useMemo(() => calibrateSkeletonFromScene(scene), [scene]);
-
-  useEffect(() => {
-    setCalibratedOffsets(calibration.offsets);
-    return () => setCalibratedOffsets(null);
-  }, [calibration, setCalibratedOffsets]);
-
-  // Step 2: 100% Spatial Partitioning + Per-Vertex Auto-Skinning
-  const { boneBindings, muscleBindings, unassignedMeshCount } = useMemo(() => {
-    const bones: BoneBinding[] = [];
-    const muscles: MuscleBinding[] = [];
-    const [cx, minY, cz] = calibration.centerOffset;
-    const s = calibration.modelScale;
-    let unassigned = 0;
-
+  // Step 0: Bake any negative mirror scale into geometry BEFORE calibration & deduplicate overlapping meshes
+  useMemo(() => {
+    scene.updateMatrixWorld(true);
     scene.traverse((obj) => {
       if (!(obj instanceof Mesh)) return;
       if (obj.scale.x < 0 || obj.scale.y < 0 || obj.scale.z < 0) {
@@ -113,6 +103,32 @@ function RealAnatomyModel({
         }
         obj.geometry.computeVertexNormals();
         obj.scale.set(Math.abs(obj.scale.x), Math.abs(obj.scale.y), Math.abs(obj.scale.z));
+      }
+    });
+    scene.updateMatrixWorld(true);
+  }, [scene]);
+
+  // Step 1: Calibrate real anatomical joint centers from GLB bone bounding boxes
+  const calibration = useMemo(() => calibrateSkeletonFromScene(scene), [scene]);
+
+  useEffect(() => {
+    setCalibratedOffsets(calibration.offsets);
+    return () => setCalibratedOffsets(null);
+  }, [calibration, setCalibratedOffsets]);
+
+  // Step 2: 100% Spatial Partitioning + Per-Vertex Auto-Skinning
+  const { boneBindings, muscleBindings, unassignedMeshCount } = useMemo(() => {
+    const bones: BoneBinding[] = [];
+    const muscles: MuscleBinding[] = [];
+    const [cx, minY, cz] = calibration.centerOffset;
+    const s = calibration.modelScale;
+    let unassigned = 0;
+
+    scene.traverse((obj) => {
+      if (!(obj instanceof Mesh)) return;
+      if (isMicroDebrisMesh(obj, calibration)) {
+        obj.visible = false;
+        return;
       }
       const nl = obj.name.toLowerCase();
       const zone = classifyMeshZone(obj, calibration);
@@ -219,7 +235,12 @@ function RealAnatomyModel({
   const hScale = heightM / DEFAULT_HEIGHT_M;
 
   return (
-    <group name="real-zanatomy-model">
+    <group
+      name="real-zanatomy-model"
+      onPointerDown={(e) => {
+        setPointerDownPos({ x: e.nativeEvent.clientX, y: e.nativeEvent.clientY });
+      }}
+    >
       {/* Bones attached to calibrated joints */}
       {boneBindings.map((b, idx) => {
         if (b.kind === 'skin' && !layers.skin) return null;
@@ -248,10 +269,19 @@ function RealAnatomyModel({
               scale={[b.modelScale * hScale, b.modelScale * hScale, b.modelScale * hScale]}
               material={material}
               castShadow={!isGhosted && b.kind !== 'skin'}
-              onClick={(e: { stopPropagation: () => void; point: Vector3 }) => {
-                if (interactionMode !== 'force') return;
+              onClick={(e: { stopPropagation: () => void; point: Vector3; nativeEvent: MouseEvent }) => {
+                if (
+                  pointerDownPos &&
+                  Math.hypot(e.nativeEvent.clientX - pointerDownPos.x, e.nativeEvent.clientY - pointerDownPos.y) >= 6
+                ) {
+                  return;
+                }
                 e.stopPropagation();
-                placeForceAtPoint(b.jointId, [e.point.x, e.point.y, e.point.z]);
+                if (interactionMode === 'force') {
+                  placeForceAtPoint(b.jointId, [e.point.x, e.point.y, e.point.z]);
+                } else {
+                  selectNearestJointAtPoint([e.point.x, e.point.y, e.point.z]);
+                }
               }}
             />
           </group>
@@ -281,9 +311,18 @@ function RealAnatomyModel({
               frustumCulled={false}
               visible
               onClick={(e) => {
-                if (interactionMode !== 'force') return;
+                if (
+                  pointerDownPos &&
+                  Math.hypot(e.nativeEvent.clientX - pointerDownPos.x, e.nativeEvent.clientY - pointerDownPos.y) >= 6
+                ) {
+                  return;
+                }
                 e.stopPropagation();
-                placeForceAtPoint(m.jointId, [e.point.x, e.point.y, e.point.z]);
+                if (interactionMode === 'force') {
+                  placeForceAtPoint(m.jointId, [e.point.x, e.point.y, e.point.z]);
+                } else {
+                  selectNearestJointAtPoint([e.point.x, e.point.y, e.point.z]);
+                }
               }}
             />
           );

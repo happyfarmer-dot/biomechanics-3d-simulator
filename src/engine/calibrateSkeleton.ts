@@ -30,10 +30,10 @@ function mergeMatchingBoxes(
   const merged = new Box3();
   let found = false;
   for (const e of entries) {
-    if (side === 'L' && !e.nameLower.includes('_l') && !e.nameLower.includes('.l') && !e.nameLower.includes('__shoulder_l') && !e.nameLower.includes('__elbow_l') && !e.nameLower.includes('__wrist_l') && !e.nameLower.includes('__hip_l') && !e.nameLower.includes('__knee_l') && !e.nameLower.includes('__ankle_l')) {
+    if (side === 'L' && e.center.x <= 0.005) {
       continue;
     }
-    if (side === 'R' && !e.nameLower.includes('_r') && !e.nameLower.includes('.r') && !e.nameLower.includes('__shoulder_r') && !e.nameLower.includes('__elbow_r') && !e.nameLower.includes('__wrist_r') && !e.nameLower.includes('__hip_r') && !e.nameLower.includes('__knee_r') && !e.nameLower.includes('__ankle_r')) {
+    if (side === 'R' && e.center.x >= -0.005) {
       continue;
     }
     if (keywords.some((kw) => e.nameLower.includes(kw))) {
@@ -100,109 +100,138 @@ export function calibrateSkeletonFromScene(scene: Object3D): CalibrationResult {
     restPositions[id] = [...fallbackKin.joints[id].worldPosition];
   }
 
-  // Spine & Head centers
+  // Spine & Head centers (Axial joints: force X = 0.0)
   const pelvisBox = mergeMatchingBoxes(boneEntries, ['__pelvis__', 'hip_bone', 'ilium', 'sacrum']);
-  if (pelvisBox) restPositions.pelvis = boxCenter(pelvisBox);
+  if (pelvisBox) {
+    const pc = boxCenter(pelvisBox);
+    restPositions.pelvis = [0.0, pc[1], pc[2]];
+  } else {
+    restPositions.pelvis = [0.0, restPositions.pelvis[1], restPositions.pelvis[2]];
+  }
 
   const lumbarBox = mergeMatchingBoxes(boneEntries, ['__lumbar__', 'lumbar']);
-  if (lumbarBox) restPositions.lumbar = boxCenter(lumbarBox);
+  if (lumbarBox) {
+    const lc = boxCenter(lumbarBox);
+    restPositions.lumbar = [0.0, lc[1], lc[2]];
+  } else {
+    restPositions.lumbar = [0.0, restPositions.lumbar[1], restPositions.lumbar[2]];
+  }
 
   const thoraxBox = mergeMatchingBoxes(boneEntries, ['__thorax__', 'sternum', 'thoracic']);
   if (thoraxBox) {
     const tc = boxCenter(thoraxBox);
-    restPositions.thorax = [tc[0], tc[1] - 0.04, tc[2]];
+    restPositions.thorax = [0.0, tc[1] - 0.04, tc[2]];
+  } else {
+    restPositions.thorax = [0.0, restPositions.thorax[1], restPositions.thorax[2]];
   }
 
   const neckBox = mergeMatchingBoxes(boneEntries, ['__neck__', 'cervical']);
-  if (neckBox) restPositions.neck = boxCenter(neckBox);
+  if (neckBox) {
+    const nc = boxCenter(neckBox);
+    restPositions.neck = [0.0, nc[1], nc[2]];
+  } else {
+    restPositions.neck = [0.0, restPositions.neck[1], restPositions.neck[2]];
+  }
 
   const headBox = mergeMatchingBoxes(boneEntries, ['__head__', 'skull', 'cranium', 'frontal']);
   if (headBox) {
     const hc = boxCenter(headBox);
-    restPositions.head = [hc[0], headBox.min.y + 0.05, hc[2]];
+    restPositions.head = [0.0, headBox.min.y + 0.05, hc[2]];
+  } else {
+    restPositions.head = [0.0, restPositions.head[1], restPositions.head[2]];
   }
 
-  // Bilateral Limbs (L = +X, R = -X)
-  for (const side of ['L', 'R'] as const) {
-    const sign = side === 'L' ? 1 : -1;
+  // Filter left-side (+X) bone entries to calibrate anatomical Left (_L) as the single source of truth
+  const leftBoneEntries = boneEntries.filter((e) => e.center.x > 0.005);
 
-    const humerus = mergeMatchingBoxes(boneEntries, ['humerus'], side);
-    const forearm = mergeMatchingBoxes(boneEntries, ['radius', 'ulna'], side);
-    const hand = mergeMatchingBoxes(boneEntries, ['carpal', 'metacarpal', 'hand'], side);
+  const humerusL = mergeMatchingBoxes(leftBoneEntries, ['humerus'], 'L');
+  const forearmL = mergeMatchingBoxes(leftBoneEntries, ['radius', 'ulna'], 'L');
+  const handL = mergeMatchingBoxes(leftBoneEntries, ['carpal', 'metacarpal', 'hand'], 'L');
 
-    if (humerus) {
-      const hc = boxCenter(humerus);
-      const hSpan = humerus.max.y - humerus.min.y;
-      // Shoulder: proximal 92% height of humerus, nudged medially to humeral head center
-      restPositions[`shoulder_${side}`] = [
-        hc[0] - sign * 0.014,
-        humerus.min.y + hSpan * 0.92,
-        hc[2],
-      ];
-    }
+  if (humerusL) {
+    const hc = boxCenter(humerusL);
+    const hSpan = humerusL.max.y - humerusL.min.y;
+    restPositions.shoulder_L = [
+      Math.max(0.08, hc[0] - 0.014),
+      humerusL.min.y + hSpan * 0.92,
+      hc[2],
+    ];
+  }
 
-    if (humerus && forearm) {
-      const hc = boxCenter(humerus);
-      const fc = boxCenter(forearm);
-      restPositions[`elbow_${side}`] = [
-        (hc[0] + fc[0]) * 0.5,
-        (humerus.min.y + forearm.max.y) * 0.5,
-        (hc[2] + fc[2]) * 0.5,
-      ];
-    }
+  if (humerusL && forearmL) {
+    const hc = boxCenter(humerusL);
+    const fc = boxCenter(forearmL);
+    restPositions.elbow_L = [
+      (hc[0] + fc[0]) * 0.5,
+      (humerusL.min.y + forearmL.max.y) * 0.5,
+      (hc[2] + fc[2]) * 0.5,
+    ];
+  }
 
-    if (forearm && hand) {
-      const fc = boxCenter(forearm);
-      const hnc = boxCenter(hand);
-      restPositions[`wrist_${side}`] = [
-        (fc[0] + hnc[0]) * 0.5,
-        (forearm.min.y + hand.max.y) * 0.5,
-        (fc[2] + hnc[2]) * 0.5,
-      ];
-    } else if (forearm) {
-      const fc = boxCenter(forearm);
-      restPositions[`wrist_${side}`] = [fc[0], forearm.min.y + 0.01, fc[2]];
-    }
+  if (forearmL && handL) {
+    const fc = boxCenter(forearmL);
+    const hnc = boxCenter(handL);
+    restPositions.wrist_L = [
+      (fc[0] + hnc[0]) * 0.5,
+      (forearmL.min.y + handL.max.y) * 0.5,
+      (fc[2] + hnc[2]) * 0.5,
+    ];
+  } else if (forearmL) {
+    const fc = boxCenter(forearmL);
+    restPositions.wrist_L = [fc[0], forearmL.min.y + 0.01, fc[2]];
+  }
 
-    const femur = mergeMatchingBoxes(boneEntries, ['femur'], side);
-    const tibia = mergeMatchingBoxes(boneEntries, ['tibia'], side);
-    const patella = mergeMatchingBoxes(boneEntries, ['patella'], side);
-    const foot = mergeMatchingBoxes(boneEntries, ['talus', 'tarsal', 'calcaneus'], side);
+  const femurL = mergeMatchingBoxes(leftBoneEntries, ['femur'], 'L');
+  const tibiaL = mergeMatchingBoxes(leftBoneEntries, ['tibia'], 'L');
+  const patellaL = mergeMatchingBoxes(leftBoneEntries, ['patella'], 'L');
+  const footL = mergeMatchingBoxes(leftBoneEntries, ['talus', 'tarsal', 'calcaneus'], 'L');
 
-    if (femur) {
-      const fmc = boxCenter(femur);
-      const fSpan = femur.max.y - femur.min.y;
-      // Hip: proximal 92% height of femur, nudged medially to femoral head
-      restPositions[`hip_${side}`] = [
-        fmc[0] - sign * 0.018,
-        femur.min.y + fSpan * 0.92,
-        fmc[2],
-      ];
-    }
+  if (femurL) {
+    const fmc = boxCenter(femurL);
+    const fSpan = femurL.max.y - femurL.min.y;
+    restPositions.hip_L = [
+      Math.max(0.05, fmc[0] - 0.018),
+      femurL.min.y + fSpan * 0.92,
+      fmc[2],
+    ];
+  }
 
-    if (femur && tibia) {
-      const fmc = boxCenter(femur);
-      const tc = boxCenter(tibia);
-      const patZ = patella ? boxCenter(patella)[2] - 0.022 : (fmc[2] + tc[2]) * 0.5;
-      restPositions[`knee_${side}`] = [
-        (fmc[0] + tc[0]) * 0.5,
-        (femur.min.y + tibia.max.y) * 0.5,
-        patZ,
-      ];
-    }
+  if (femurL && tibiaL) {
+    const fmc = boxCenter(femurL);
+    const tc = boxCenter(tibiaL);
+    const patZ = patellaL ? boxCenter(patellaL)[2] - 0.022 : (fmc[2] + tc[2]) * 0.5;
+    restPositions.knee_L = [
+      (fmc[0] + tc[0]) * 0.5,
+      (femurL.min.y + tibiaL.max.y) * 0.5,
+      patZ,
+    ];
+  }
 
-    if (tibia && foot) {
-      const tc = boxCenter(tibia);
-      const ftc = boxCenter(foot);
-      restPositions[`ankle_${side}`] = [
-        (tc[0] + ftc[0]) * 0.5,
-        (tibia.min.y + foot.max.y) * 0.5,
-        (tc[2] + ftc[2]) * 0.5,
-      ];
-    } else if (tibia) {
-      const tc = boxCenter(tibia);
-      restPositions[`ankle_${side}`] = [tc[0], tibia.min.y + 0.01, tc[2]];
-    }
+  if (tibiaL && footL) {
+    const tc = boxCenter(tibiaL);
+    const ftc = boxCenter(footL);
+    restPositions.ankle_L = [
+      (tc[0] + ftc[0]) * 0.5,
+      (tibiaL.min.y + footL.max.y) * 0.5,
+      (tc[2] + ftc[2]) * 0.5,
+    ];
+  } else if (tibiaL) {
+    const tc = boxCenter(tibiaL);
+    restPositions.ankle_L = [tc[0], tibiaL.min.y + 0.01, tc[2]];
+  }
+
+  // Strictly mirror all Right-side (_R, -X) joints from the calibrated Left-side (_L, +X) joints
+  const MIRROR_PAIRS: Array<[JointId, JointId]> = [
+    ['shoulder_L', 'shoulder_R'],
+    ['elbow_L', 'elbow_R'],
+    ['wrist_L', 'wrist_R'],
+    ['hip_L', 'hip_R'],
+    ['knee_L', 'knee_R'],
+    ['ankle_L', 'ankle_R'],
+  ];
+  for (const [idL, idR] of MIRROR_PAIRS) {
+    const posL = restPositions[idL];
+    restPositions[idR] = [-posL[0], posL[1], posL[2]];
   }
 
   // Compute parent-relative offsets

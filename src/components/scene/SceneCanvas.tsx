@@ -1,6 +1,7 @@
 import { Environment, Grid, Lightformer } from '@react-three/drei';
 import { Canvas } from '@react-three/fiber';
-import { useState } from 'react';
+import { useRef, useState } from 'react';
+import { useSimStore } from '../../store/useSimStore';
 import { CameraRig } from './CameraRig';
 import { GlbAnatomyLoader } from './GlbAnatomyLoader';
 import { HumanRig } from './HumanRig';
@@ -12,9 +13,16 @@ import { SpatialForceEditor } from './SpatialForceEditor';
 export function SceneCanvas() {
   const [contextLost, setContextLost] = useState(false);
   const [externalGlbActive, setExternalGlbActive] = useState(false);
+  const setShowJointHandles = useSimStore((s) => s.setShowJointHandles);
+  const pointerDownPosRef = useRef<{ x: number; y: number } | null>(null);
 
   return (
-    <div className="relative h-full w-full bg-[#090d16]">
+    <div
+      className="relative h-full w-full bg-[#090d16]"
+      onPointerDown={(e) => {
+        pointerDownPosRef.current = { x: e.clientX, y: e.clientY };
+      }}
+    >
       {contextLost && (
         <div className="absolute inset-0 z-50 flex flex-col items-center justify-center bg-slate-950/90 p-6 text-center">
           <p className="text-sm font-semibold text-amber-300">圖形渲染環境暫時中斷</p>
@@ -33,6 +41,13 @@ export function SceneCanvas() {
         shadows
         dpr={[1, 1.5]}
         camera={{ position: [1.55, 1.35, 2.35], fov: 42, near: 0.01, far: 50 }}
+        onPointerMissed={(e) => {
+          const down = pointerDownPosRef.current;
+          if (down && Math.hypot(e.clientX - down.x, e.clientY - down.y) >= 6) {
+            return;
+          }
+          setShowJointHandles(false);
+        }}
         onCreated={({ gl }) => {
           const canvas = gl.domElement;
           canvas.addEventListener('webglcontextlost', (e) => {

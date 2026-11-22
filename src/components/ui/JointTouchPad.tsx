@@ -31,6 +31,7 @@ const PRIMARY_CHILD_MAP: Partial<Record<JointId, JointId>> = {
 
 export function JointTouchPad() {
   const useTouchPad = useSimStore((s) => s.useTouchPad);
+  const showJointHandles = useSimStore((s) => s.showJointHandles);
   const selectedJoint = useSimStore((s) => s.selectedJoint);
   const interactionMode = useSimStore((s) => s.interactionMode);
   const pose = useSimStore((s) => s.pose);
@@ -113,7 +114,7 @@ export function JointTouchPad() {
     return () => cancelAnimationFrame(rafId);
   }, []);
 
-  if (!useTouchPad || !selectedJoint || interactionMode !== 'pose') return null;
+  if (!useTouchPad || !showJointHandles || !selectedJoint || interactionMode !== 'pose') return null;
 
   const cfg = SKELETON_CONFIG[selectedJoint];
   const angles = pose[selectedJoint];

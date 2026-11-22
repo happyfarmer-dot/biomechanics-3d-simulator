@@ -41,9 +41,154 @@ function smoothstep(edge0: number, edge1: number, x: number): number {
   return t * t * (3 - 2 * t);
 }
 
+const LOWER_BODY_KEYWORDS = [
+  'glute',
+  'tensor_fascia',
+  'tensor fascia',
+  'iliotibial',
+  'iliac',
+  'psoas',
+  'sartorius',
+  'quadricep',
+  'rectus_femoris',
+  'rectus femoris',
+  'vastus',
+  'femur',
+  'femoris',
+  'gracilis',
+  'adductor_longus',
+  'adductor_brevis',
+  'adductor_magnus',
+  'adductor_minimus',
+  'adductor_hallucis',
+  'adductor longus',
+  'adductor brevis',
+  'adductor magnus',
+  'adductor minimus',
+  'adductor hallucis',
+  'hamstring',
+  'biceps_femoris',
+  'biceps femoris',
+  'semitendinosus',
+  'semimembranosus',
+  'pectineus',
+  'piriformis',
+  'obturator',
+  'gemellus',
+  'quadratus_femoris',
+  'quadratus femoris',
+  'tibia',
+  'fibula',
+  'peroneus',
+  'fibularis',
+  'gastroc',
+  'soleus',
+  'plantar',
+  'popliteus',
+  'patella',
+  'calcane',
+  'talus',
+  'tarsal',
+  'metatarsal',
+  'hallucis',
+  'pedis',
+  'foot',
+  'toe',
+  'hip_bone',
+  'ilium',
+  'ischium',
+  'pubis',
+  'sacrum',
+  'coccyx',
+];
+
+const UPPER_LIMB_ANATOMY_KEYWORDS = [
+  'humerus',
+  'radius',
+  'ulna',
+  'carpal',
+  'metacarpal',
+  'capitate',
+  'hamate',
+  'lunate',
+  'pisiform',
+  'scaphoid',
+  'trapezium',
+  'trapezoid',
+  'triquetrum',
+  'phalanx',
+  'phalanges',
+  'hand',
+  'manus',
+  'finger',
+  'thumb',
+  'pollicis',
+  'indicis',
+  'carpi',
+  'wrist',
+  'forearm',
+  'palmar',
+  'thenar',
+  'hypothenar',
+  'lumbrical',
+  'interosse',
+  'retinaculum',
+  'tendon_sheath',
+  'deltoid',
+  'biceps_brachii',
+  'biceps brachii',
+  'triceps',
+  'brachialis',
+  'brachioradialis',
+  'pronator',
+  'supinator',
+  'anconeus',
+  'coracobrachialis',
+  'supraspinatus',
+  'infraspinatus',
+  'subscapularis',
+  'teres_major',
+  'teres_minor',
+  'teres major',
+  'teres minor',
+  'flexor_digitorum',
+  'extensor_digitorum',
+  'digiti_minimi',
+];
+
+const THORAX_SHOULDER_BOUNDARY_KEYWORDS = [
+  'latissimus',
+  'pectoralis',
+  'serratus',
+  'trapezius',
+  'rhomboid',
+  'subclavius',
+];
+
+/**
+ * Strips the legacy export prefix BONE__<jointId>__ or MUSCLE__<jointId>__ so only the
+ * true anatomical structure name is matched against keyword lists.
+ */
+function getCleanAnatomicalName(rawName: string): string {
+  const nl = rawName.toLowerCase();
+  const match = nl.match(/^(?:bone|muscle)__[a-z0-9_]+__(.+)$/);
+  return match ? match[1] : nl;
+}
+
+export function isMicroDebrisMesh(mesh: Mesh, calibration: CalibrationResult): boolean {
+  mesh.updateMatrixWorld(true);
+  const rawBox = new Box3().setFromObject(mesh);
+  if (rawBox.isEmpty()) return true;
+  const size = new Vector3();
+  rawBox.getSize(size);
+  const diagM = size.length() * calibration.modelScale;
+  return diagM < 0.015;
+}
+
 /**
  * Classifies any mesh (bone, muscle, or tendon) into one of 6 mutually exclusive
- * spatial limb zones based on its normalized bounding-box center and calibrated landmarks.
+ * spatial limb zones based on its normalized bounding-box center, anatomical keywords,
+ * and calibrated landmarks.
  */
 export function classifyMeshZone(
   mesh: Mesh,
@@ -59,60 +204,96 @@ export function classifyMeshZone(
   const cx = (rawCenter.x - ocx) * s;
   const cy = (rawCenter.y - minY) * s;
 
-  const nl = mesh.name.toLowerCase();
-  const neckY = calibration.restPositions.neck[1];
+  const cleanName = getCleanAnatomicalName(mesh.name);
+  const r = calibration.restPositions;
+  const neckY = r.neck[1];
 
+  // 1. Foot / plantar level guard: center.y < anklePos.y + 0.05m MUST be leg_L or leg_R
+  const ankleY = (r.ankle_L[1] + r.ankle_R[1]) * 0.5;
+  if (cy < ankleY + 0.05) {
+    return cx >= 0 ? 'leg_L' : 'leg_R';
+  }
+
+  // 2. Head & Neck
   if (
     cy >= neckY - 0.015 ||
-    nl.includes('__head__') ||
-    nl.includes('__neck__') ||
-    nl.includes('skull') ||
-    nl.includes('mandible') ||
-    nl.includes('masseter') ||
-    nl.includes('sternocleidomastoid')
+    cleanName.includes('skull') ||
+    cleanName.includes('cranium') ||
+    cleanName.includes('frontal') ||
+    cleanName.includes('parietal') ||
+    cleanName.includes('temporal') ||
+    cleanName.includes('occipital') ||
+    cleanName.includes('sphenoid') ||
+    cleanName.includes('ethmoid') ||
+    cleanName.includes('zygomatic') ||
+    cleanName.includes('maxilla') ||
+    cleanName.includes('mandible') ||
+    cleanName.includes('masseter') ||
+    cleanName.includes('sternocleidomastoid') ||
+    cleanName.includes('platysma')
   ) {
     return 'head_neck';
   }
 
-  const shLX = calibration.restPositions.shoulder_L[0];
-  const shRX = calibration.restPositions.shoulder_R[0];
-  const shY =
-    (calibration.restPositions.shoulder_L[1] + calibration.restPositions.shoulder_R[1]) * 0.5;
-  const hipY =
-    (calibration.restPositions.hip_L[1] + calibration.restPositions.hip_R[1]) * 0.5;
+  // 3. Explicit lower-body / pelvic keyword guard (on clean anatomical name): NEVER classify into arm_L or arm_R
+  const hasLowerBodyKeyword = LOWER_BODY_KEYWORDS.some((kw) => cleanName.includes(kw));
+  const pelvisY = r.pelvis[1];
+  const hipY = (r.hip_L[1] + r.hip_R[1]) * 0.5;
+  const hipAbsX = Math.abs(r.hip_L[0]);
+  const wristAbsX = Math.abs(r.wrist_L[0]);
+  const elbowY = (r.elbow_L[1] + r.elbow_R[1]) * 0.5;
 
-  if (
-    nl.includes('shoulder_l') ||
-    nl.includes('elbow_l') ||
-    nl.includes('wrist_l') ||
-    (cx > shLX * 0.72 && cy > hipY - 0.08 && cy < shY + 0.12)
-  ) {
-    return 'arm_L';
-  }
-  if (
-    nl.includes('shoulder_r') ||
-    nl.includes('elbow_r') ||
-    nl.includes('wrist_r') ||
-    (cx < shRX * 0.72 && cy > hipY - 0.08 && cy < shY + 0.12)
-  ) {
-    return 'arm_R';
+  if (hasLowerBodyKeyword) {
+    if (
+      cleanName.includes('hip_bone') ||
+      cleanName.includes('sacrum') ||
+      cleanName.includes('ilium') ||
+      cleanName.includes('pubis') ||
+      cleanName.includes('ischium') ||
+      cleanName.includes('coccyx')
+    ) {
+      return 'torso';
+    }
+    return cx >= 0 ? 'leg_L' : 'leg_R';
   }
 
-  if (
-    nl.includes('hip_l') ||
-    nl.includes('knee_l') ||
-    nl.includes('ankle_l') ||
-    (cy < hipY + 0.03 && cx >= 0)
-  ) {
-    return 'leg_L';
+  // 4. Spatial guard below pelvisPos.y + 0.08m:
+  // If close to the thigh/hip surface (|cx| < |hipPos.x| + 0.08m) or not laterally out at the forearm/hand
+  // (|cx| <= |wristPos.x| - 0.06m) or below the fingertips (cy <= 0.65m), it CANNOT be an arm mesh!
+  const isUpperLimbKeyword =
+    UPPER_LIMB_ANATOMY_KEYWORDS.some((kw) => cleanName.includes(kw)) && cy > 0.65;
+  const isBelowPelvisMargin = cy < pelvisY + 0.08;
+  const isNearThighSurface = Math.abs(cx) < hipAbsX + 0.08;
+  const isOutAtHandLateral =
+    (Math.abs(cx) > wristAbsX - 0.065 || isUpperLimbKeyword) &&
+    !isNearThighSurface &&
+    cy > 0.65;
+
+  if (isBelowPelvisMargin && !isOutAtHandLateral) {
+    if (cy < hipY + 0.04) {
+      return cx >= 0 ? 'leg_L' : 'leg_R';
+    }
+    return 'torso';
   }
+
+  const shLX = r.shoulder_L[0];
+  const shY = (r.shoulder_L[1] + r.shoulder_R[1]) * 0.5;
+
+  // 5. Upper limbs (only if above pelvis margin or verified laterally out at hand/forearm)
+  // Always use actual spatial side (cx >= 0 -> arm_L, cx < 0 -> arm_R)
+  const canBeArm = !isBelowPelvisMargin || isOutAtHandLateral;
+
   if (
-    nl.includes('hip_r') ||
-    nl.includes('knee_r') ||
-    nl.includes('ankle_r') ||
-    (cy < hipY + 0.03 && cx < 0)
+    canBeArm &&
+    (isUpperLimbKeyword ||
+      isOutAtHandLateral ||
+      (Math.abs(cx) > Math.abs(shLX) * 0.75 && cy > elbowY - 0.25 && cy < shY + 0.12))
   ) {
-    return 'leg_R';
+    return cx >= 0 ? 'arm_L' : 'arm_R';
+  }
+
+  if (cy < hipY + 0.04) {
+    return cx >= 0 ? 'leg_L' : 'leg_R';
   }
 
   return 'torso';
@@ -159,8 +340,8 @@ export function findNearestBoneJointInZone(
     const hp = r[`hip_${side}` as JointId];
     const kn = r[`knee_${side}` as JointId];
     const an = r[`ankle_${side}` as JointId];
+    if (py <= an[1] + 0.05) return `ankle_${side}` as JointId;
     if (py >= hp[1] + 0.03) return 'pelvis';
-    if (py <= an[1] + 0.02) return `ankle_${side}` as JointId;
     if (py <= kn[1] + 0.015) return `knee_${side}` as JointId;
     return `hip_${side}` as JointId;
   }
@@ -175,15 +356,16 @@ export function findNearestBoneJointInZone(
  * Computes strict anatomical vertex weights with:
  * - ±0.055m (5.5cm) clamped transition bands at knee & elbow (0.0 knee weight in mid-thigh!)
  * - Pelvic-gluteal origin pinning above hipPos.y + 0.03m
- * - Thorax-shoulder origin pinning by lateral distance |vx| vs shoulder half-width sx
- * - Hand/foot/head virtual terminal segment pinning (w = 1.0 beyond wrist/ankle/head)
+ * - Dual horizontal & vertical gates for thorax-shoulder boundary (latissimus/pectoralis/serratus/trapezius & vy < shoulderPos.y)
+ * - Foot sole 100% ankle binding below anklePos.y + 0.05m
  */
 function computeVertexJointPairAndWeight(
-  wx: number,
-  wy: number,
-  _wz: number,
+  vx: number,
+  vy: number,
+  _vz: number,
   zone: LimbZone,
-  r: Record<JointId, Vec3>
+  r: Record<JointId, Vec3>,
+  meshNameLower: string = ''
 ): { jA: JointId; jB: JointId; wB: number } {
   const TRANSITION_M = 0.055; // strict ±5.5cm transition band
 
@@ -197,20 +379,25 @@ function computeVertexJointPairAndWeight(
     const kneeY = r[kneeId][1];
     const ankleY = r[ankleId][1];
 
+    // 0. Foot sole / plantar guard: below ankleY + 0.03m is 100% bound to ankle
+    if (vy < ankleY + 0.01) {
+      return { jA: kneeId, jB: ankleId, wB: 1.0 };
+    }
+
     // 1. Pelvic-Hip gluteal origin pinning: above hipY + 0.03m is 100% pelvis
-    if (wy >= hipY - 0.12) {
-      const wHip = smoothstep(hipY + 0.03, hipY - 0.12, wy);
+    if (vy >= hipY - 0.12) {
+      const wHip = smoothstep(hipY + 0.03, hipY - 0.12, vy);
       return { jA: 'pelvis', jB: hipId, wB: wHip };
     }
 
     // 2. Mid-thigh down to Knee transition (strict ±5.5cm around kneeY)
-    if (wy >= kneeY - TRANSITION_M) {
-      const wKnee = smoothstep(kneeY + TRANSITION_M, kneeY - TRANSITION_M, wy);
+    if (vy >= kneeY - TRANSITION_M) {
+      const wKnee = smoothstep(kneeY + TRANSITION_M, kneeY - TRANSITION_M, vy);
       return { jA: hipId, jB: kneeId, wB: wKnee };
     }
 
     // 3. Lower leg down to Ankle + Foot virtual segment (strict ±4.5cm around ankleY; below is 100% ankle)
-    const wAnkle = smoothstep(ankleY + 0.045, ankleY - 0.025, wy);
+    const wAnkle = smoothstep(ankleY + 0.045, ankleY - 0.025, vy);
     return { jA: kneeId, jB: ankleId, wB: wAnkle };
   }
 
@@ -224,65 +411,83 @@ function computeVertexJointPairAndWeight(
     const el = r[elId];
     const wr = r[wrId];
     const sx = Math.abs(sh[0]);
-    const absX = Math.abs(wx);
+    const absX = Math.abs(vx);
+    const isBoundaryMuscle = THORAX_SHOULDER_BOUNDARY_KEYWORDS.some((kw) =>
+      meshNameLower.includes(kw)
+    );
 
-    // 1. Thorax-Shoulder origin pinning (pectoralis / latissimus medial to shoulder)
-    if (absX < 1.05 * sx && wy > el[1] + TRANSITION_M) {
-      const wArm = smoothstep(0.65 * sx, 1.05 * sx, absX);
+    // 1. Thorax-Shoulder origin pinning with Dual Horizontal (wx) + Vertical (wy) Gate:
+    // Applies to thorax-shoulder boundary muscles (latissimus, pectoralis, serratus, trapezius, rhomboid, subclavius)
+    // OR vertices medial to the shoulder joint (absX < 0.95 * sx and above shoulderPos.y - 0.14)
+    if (isBoundaryMuscle || (absX < 0.95 * sx && vy > el[1] + TRANSITION_M)) {
+      const wxGate = smoothstep(0.82 * sx, 1.12 * sx, absX);
+      const wyGate =
+        vy < sh[1]
+          ? smoothstep(sh[1] - 0.14, sh[1] - 0.02, vy)
+          : 1.0;
+      const wArm = wxGate * wyGate;
       return { jA: 'thorax', jB: shId, wB: wArm };
     }
 
     // 2. Upper arm down to Elbow transition (strict ±5.5cm around el.y)
-    if (wy >= el[1] - TRANSITION_M) {
-      const wElbow = smoothstep(el[1] + TRANSITION_M, el[1] - TRANSITION_M, wy);
+    if (vy >= el[1] - TRANSITION_M) {
+      const wElbow = smoothstep(el[1] + TRANSITION_M, el[1] - TRANSITION_M, vy);
       return { jA: shId, jB: elId, wB: wElbow };
     }
 
     // 3. Forearm down to Wrist + Hand virtual segment (below wr.y is 100% wrist)
-    const wWrist = smoothstep(wr[1] + 0.045, wr[1] - 0.02, wy);
+    const wWrist = smoothstep(wr[1] + 0.045, wr[1] - 0.02, vy);
     return { jA: elId, jB: wrId, wB: wWrist };
   }
 
   if (zone === 'head_neck') {
     const neckY = r.neck[1];
     const headY = r.head[1];
-    if (wy < headY - 0.025) {
-      const wNeck = smoothstep(neckY - 0.03, neckY + 0.03, wy);
+    if (vy < headY - 0.025) {
+      const wNeck = smoothstep(neckY - 0.03, neckY + 0.03, vy);
       return { jA: 'thorax', jB: 'neck', wB: wNeck };
     }
-    const wHead = smoothstep(headY - 0.025, headY + 0.02, wy);
+    const wHead = smoothstep(headY - 0.025, headY + 0.02, vy);
     return { jA: 'neck', jB: 'head', wB: wHead };
   }
 
-  // Torso (pelvis -> lumbar -> thorax) with lateral shoulder pinning for wide chest/back muscles
+  // Torso (pelvis -> lumbar -> thorax) with Dual Horizontal + Vertical Gate for chest/back muscles
   const lumbarY = r.lumbar[1];
   const thoraxY = r.thorax[1];
   const hipY = (r.hip_L[1] + r.hip_R[1]) * 0.5;
+  const shY = (r.shoulder_L[1] + r.shoulder_R[1]) * 0.5;
   const sx = (Math.abs(r.shoulder_L[0]) + Math.abs(r.shoulder_R[0])) * 0.5;
-  const absX = Math.abs(wx);
+  const absX = Math.abs(vx);
 
-  // If a torso muscle (e.g., pectoralis or latissimus) extends laterally toward the humerus
-  if (wy > lumbarY && absX > 0.65 * sx) {
-    const side = wx >= 0 ? 'L' : 'R';
+  // Dual Horizontal + Vertical Gate for latissimus, pectoralis, serratus, trapezius, and upper torso vertices
+  if (vy > lumbarY && absX > 0.82 * sx && vy > shY - 0.14) {
+    const side = vx >= 0 ? 'L' : 'R';
     const shId = `shoulder_${side}` as JointId;
-    const wArm = smoothstep(0.65 * sx, 1.05 * sx, absX);
-    return { jA: 'thorax', jB: shId, wB: wArm };
+    const wxGate = smoothstep(0.82 * sx, 1.12 * sx, absX);
+    const wyGate =
+      vy < shY
+        ? smoothstep(shY - 0.14, shY - 0.02, vy)
+        : 1.0;
+    const wArm = wxGate * wyGate;
+    if (wArm > 1e-4) {
+      return { jA: 'thorax', jB: shId, wB: wArm };
+    }
   }
 
   // If a torso/gluteal muscle extends below lumbar into the hip region
-  if (wy < hipY + 0.03) {
-    const side = wx >= 0 ? 'L' : 'R';
+  if (vy < hipY + 0.03) {
+    const side = vx >= 0 ? 'L' : 'R';
     const hipId = `hip_${side}` as JointId;
-    const wHip = smoothstep(hipY + 0.03, hipY - 0.12, wy);
+    const wHip = smoothstep(hipY + 0.03, hipY - 0.12, vy);
     return { jA: 'pelvis', jB: hipId, wB: wHip };
   }
 
-  if (wy <= lumbarY + 0.04) {
-    const wLumbar = smoothstep(lumbarY - 0.04, lumbarY + 0.04, wy);
+  if (vy <= lumbarY + 0.04) {
+    const wLumbar = smoothstep(lumbarY - 0.04, lumbarY + 0.04, vy);
     return { jA: 'pelvis', jB: 'lumbar', wB: wLumbar };
   }
 
-  const wThorax = smoothstep(thoraxY - 0.06, thoraxY + 0.02, wy);
+  const wThorax = smoothstep(thoraxY - 0.06, thoraxY + 0.02, vy);
   return { jA: 'lumbar', jB: 'thorax', wB: wThorax };
 }
 
@@ -313,6 +518,7 @@ export function prepareAutoSkinnedMuscle(
   const usedSet = new Set<JointId>();
   const v = new Vector3();
 
+  const meshNameLower = mesh.name.toLowerCase();
   let minX = Infinity, minYBox = Infinity, minZ = Infinity;
   let maxX = -Infinity, maxYBox = -Infinity, maxZ = -Infinity;
 
@@ -329,7 +535,7 @@ export function prepareAutoSkinnedMuscle(
     if (wy > maxYBox) maxYBox = wy;
     if (wz > maxZ) maxZ = wz;
 
-    const { jA, jB, wB } = computeVertexJointPairAndWeight(wx, wy, wz, zone, r);
+    const { jA, jB, wB } = computeVertexJointPairAndWeight(wx, wy, wz, zone, r, meshNameLower);
 
     jointAIndices[i] = JOINT_TO_INDEX[jA];
     jointBIndices[i] = JOINT_TO_INDEX[jB];

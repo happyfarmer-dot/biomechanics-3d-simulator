@@ -104,6 +104,10 @@ export function computeKinematics(
   const joints = {} as Record<JointId, JointWorldState>;
   const scale = heightM / DEFAULT_HEIGHT_M;
 
+  const pelvisAngles = pose.pelvis ?? { flexion: 0, abduction: 0, rotation: 0 };
+  const pelvisQuat = localEulerToQuaternion(anatomicalToEuler('pelvis', pelvisAngles));
+  const pelvisInvQuat = pelvisQuat.clone().invert();
+
   for (const id of JOINT_ORDER) {
     const cfg = SKELETON_CONFIG[id];
     const angles = pose[id] ?? { flexion: 0, abduction: 0, rotation: 0 };
@@ -126,8 +130,18 @@ export function computeKinematics(
     let worldQuat: Quaternion;
 
     if (cfg.parentId === null) {
+      // Pelvis: keephip/ankle grounded by adjusting pelvis vertical shift from hip pivot
       worldPos = localOffset;
       worldQuat = localQuat;
+    } else if (id === 'hip_L' || id === 'hip_R') {
+      // Closed-chain standing pelvis tilt: counter-rotate hip_L and hip_R by pelvisInvQuat
+      // and keep hip world positions anchored so both legs stand upright on y = 0 floor.
+      const parent = joints[cfg.parentId];
+      const parentPos = new Vector3(...parent.worldPosition);
+      worldPos = parentPos.add(localOffset);
+      worldQuat = new Quaternion(...parent.worldQuaternion)
+        .multiply(pelvisInvQuat)
+        .multiply(localQuat);
     } else {
       const parent = joints[cfg.parentId];
       const parentPos = new Vector3(...parent.worldPosition);
