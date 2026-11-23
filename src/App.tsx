@@ -2,6 +2,7 @@ import { ErrorBoundary } from './components/ErrorBoundary';
 import { SceneCanvas } from './components/scene/SceneCanvas';
 import { InjuryAlertOverlay } from './components/ui/InjuryAlertOverlay';
 import { InspectorPanel } from './components/ui/InspectorPanel';
+import { ActionScrubber } from './components/ui/ActionScrubber';
 import { JointTouchPad } from './components/ui/JointTouchPad';
 import { LayerToolbar } from './components/ui/LayerToolbar';
 import { MacroHUD } from './components/ui/MacroHUD';
@@ -24,6 +25,7 @@ export function App() {
           <MacroHUD />
           <MuscleHeatmapHUD />
           <JointTouchPad />
+          <ActionScrubber />
           <SpatialForcePad />
           <InspectorPanel />
         </main>

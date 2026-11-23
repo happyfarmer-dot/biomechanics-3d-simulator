@@ -44,6 +44,8 @@ export function LayerToolbar() {
   const setShowJointHandles = useSimStore((s) => s.setShowJointHandles);
   const muscleEffectMode = useSimStore((s) => s.muscleEffectMode);
   const setMuscleEffectMode = useSimStore((s) => s.setMuscleEffectMode);
+  const skinOpacity = useSimStore((s) => s.skinOpacity);
+  const setSkinOpacity = useSimStore((s) => s.setSkinOpacity);
 
   useEffect(() => {
     if (!expanded) return;
@@ -96,26 +98,46 @@ export function LayerToolbar() {
             {LAYER_ITEMS.map(({ key, label, icon: Icon }) => {
               const active = layers[key];
               return (
-                <button
-                  key={key}
-                  type="button"
-                  onClick={() => toggleLayer(key)}
-                  className={`flex w-full items-center justify-between rounded-lg px-2 py-1.5 text-xs transition-colors cursor-pointer ${
-                    active
-                      ? 'bg-sky-500/15 text-sky-200 border border-sky-500/30'
-                      : 'bg-slate-900/50 text-slate-400 border border-transparent hover:bg-slate-900'
-                  }`}
-                >
-                  <span className="flex items-center gap-2">
-                    <Icon className="h-3.5 w-3.5" />
-                    {label}
-                  </span>
-                  {active ? (
-                    <Eye className="h-3.5 w-3.5 text-sky-400" />
-                  ) : (
-                    <EyeOff className="h-3.5 w-3.5 text-slate-600" />
+                <div key={key} className="space-y-1">
+                  <button
+                    type="button"
+                    data-testid={`layer-toggle-${key}`}
+                    onClick={() => toggleLayer(key)}
+                    className={`flex w-full items-center justify-between rounded-lg px-2 py-1.5 text-xs transition-colors cursor-pointer ${
+                      active
+                        ? 'bg-sky-500/15 text-sky-200 border border-sky-500/30'
+                        : 'bg-slate-900/50 text-slate-400 border border-transparent hover:bg-slate-900'
+                    }`}
+                  >
+                    <span className="flex items-center gap-2">
+                      <Icon className="h-3.5 w-3.5" />
+                      {label}
+                    </span>
+                    {active ? (
+                      <Eye className="h-3.5 w-3.5 text-sky-400" />
+                    ) : (
+                      <EyeOff className="h-3.5 w-3.5 text-slate-600" />
+                    )}
+                  </button>
+                  {key === 'skin' && active && (
+                    <div className="rounded-lg bg-slate-900/80 px-2 py-1.5 space-y-1 border border-slate-800">
+                      <div className="flex items-center justify-between text-[10px] text-slate-300">
+                        <span>皮膚透明度</span>
+                        <span className="font-mono text-sky-300">{Math.round(skinOpacity * 100)}%</span>
+                      </div>
+                      <input
+                        type="range"
+                        data-testid="skin-opacity-slider"
+                        min={15}
+                        max={100}
+                        step={1}
+                        value={Math.round(skinOpacity * 100)}
+                        onChange={(e) => setSkinOpacity(Number(e.target.value) / 100)}
+                        className="w-full h-1.5 accent-amber-300 cursor-pointer"
+                      />
+                    </div>
                   )}
-                </button>
+                </div>
               );
             })}
           </div>

@@ -9,7 +9,6 @@ import {
   getBoneMaterial,
   getCartilageMaterial,
   getJointCapsuleMaterial,
-  getSkinFresnelMaterial,
 } from '../../utils/anatomyTextures';
 
 const UP_VEC = new Vector3(0, 1, 0);
@@ -337,7 +336,6 @@ function BoneSegment({
   radius,
   scale,
   showSkeleton,
-  showSkin,
   isGhosted,
 }: {
   jointId: JointId;
@@ -346,7 +344,6 @@ function BoneSegment({
   radius: number;
   scale: number;
   showSkeleton: boolean;
-  showSkin: boolean;
   isGhosted: boolean;
 }) {
   const { midpoint, length, quaternion } = useMemo(() => {
@@ -364,16 +361,6 @@ function BoneSegment({
   }, [start, end]);
 
   const glbUrl = SKELETON_CONFIG[jointId].glbUrl;
-  const isHead = jointId === 'head';
-  const isThorax = jointId === 'thorax';
-  const isPelvis = jointId === 'pelvis';
-  const skinRadius = isHead
-    ? radius * 1.45
-    : isThorax
-    ? radius * 1.65
-    : isPelvis
-    ? radius * 1.6
-    : radius * 1.95;
 
   return (
     <group position={midpoint} quaternion={quaternion}>
@@ -391,16 +378,6 @@ function BoneSegment({
             isGhosted={isGhosted}
           />
         )
-      )}
-
-      {showSkin && (
-        <mesh material={getSkinFresnelMaterial(isGhosted)}>
-          {isHead ? (
-            <sphereGeometry args={[skinRadius, 24, 24]} />
-          ) : (
-            <capsuleGeometry args={[skinRadius, Math.max(length * 0.65, 0.02), 8, 16]} />
-          )}
-        </mesh>
       )}
     </group>
   );
@@ -557,7 +534,6 @@ export function HumanRig({ hideProceduralBones = false }: { hideProceduralBones?
               radius={cfg.boneRadius * scale}
               scale={scale}
               showSkeleton={!hideProceduralBones && layers.skeleton}
-              showSkin={layers.skin}
               isGhosted={!isSegmentVisible}
             />
 

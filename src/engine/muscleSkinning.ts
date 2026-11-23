@@ -1,9 +1,13 @@
-import { Box3, BufferGeometry, Mesh, Quaternion, Vector3 } from 'three';
+import { Box3, BufferGeometry, Float32BufferAttribute, Mesh, Quaternion, Vector3 } from 'three';
 import { DEFAULT_HEIGHT_M } from '../data/skeletonConfig';
 import type { JointId, KinematicsResult, Vec3 } from '../types/biomechanics';
 import type { CalibrationResult } from './calibrateSkeleton';
 
 export type LimbZone = 'arm_L' | 'arm_R' | 'leg_L' | 'leg_R' | 'head_neck' | 'torso';
+
+function clamp(v: number, min: number, max: number): number {
+  return Math.max(min, Math.min(max, v));
+}
 
 export interface SkinnedMuscleData {
   name: string;
@@ -427,16 +431,17 @@ function computeVertexJointPairAndWeight(
     const absX = Math.abs(vx);
     const isDeltoid = meshNameLower.includes('deltoid');
 
-    // Dedicated Deltoid (acromion/clavicle/scapular spine -> deltoid tuberosity):
-    // Keep only medial-most superior origin (absX < sx - 0.015 && vy >= sh[1]) on thorax;
-    // all lateral/inferior belly & insertion vertices smoothly transition to w_arm = 1.0.
+    // Dedicated Deltoid: C1 continuous projection from acromion/clavicle/scapular spine (w=0) to deltoid tuberosity (w=1)
     if (isDeltoid) {
-      if (vy < sh[1] || absX >= sx) {
-        return { jA: 'thorax', jB: shId, wB: 1.0 };
-      }
-      const wx = smoothstep(sx - 0.05, sx - 0.015, absX);
-      const wy = smoothstep(sh[1] + 0.04, sh[1], vy);
-      const wArm = 1.0 - (1.0 - wx) * (1.0 - wy);
+      const acromionX = sh[0] * 0.85;
+      const acromionY = sh[1] + 0.045;
+      const tuberosityX = sh[0] * 1.12;
+      const tuberosityY = sh[1] - 0.11;
+      const dx = tuberosityX - acromionX;
+      const dy = tuberosityY - acromionY;
+      const lenSq = dx * dx + dy * dy;
+      const t = lenSq > 1e-6 ? clamp(((vx - acromionX) * dx + (vy - acromionY) * dy) / lenSq, 0, 1) : 1;
+      const wArm = smoothstep(0.05, 0.85, t);
       return { jA: 'thorax', jB: shId, wB: wArm };
     }
 
@@ -444,21 +449,25 @@ function computeVertexJointPairAndWeight(
       meshNameLower.includes(kw)
     );
 
-    // 1. Strict Thorax-Shoulder origin pinning (eliminates flying-squirrel armpit wing membrane):
-    // For latissimus/pectoralis/serratus/teres/subscapularis/rhomboid/trapezius OR medial-origin arm meshes OR vertices medial to humeral head
+    // 1. Continuous C1 Gaussian humerus-axis field for chest/back muscles (eliminates hard step-function wing):
     if (isAxillaMuscle || isMedialOriginMesh || (absX < sx - 0.02 && vy > el[1] + TRANSITION_M)) {
-      if (vy < sh[1] - 0.055) {
-        return { jA: 'thorax', jB: shId, wB: 0.0 };
-      }
-      const dInsertion = Math.hypot(
-        vx - sh[0] * 1.08,
-        vy - (sh[1] - 0.02),
-        vz - sh[2]
-      );
-      if (absX < sx - 0.03 || dInsertion > 0.095) {
-        return { jA: 'thorax', jB: shId, wB: 0.0 };
-      }
-      const wArm = Math.pow(smoothstep(0.095, 0.03, dInsertion), 2.0) * 0.85;
+      const hx = (sh[0] + el[0]) * 0.5;
+      const hy = (sh[1] + el[1]) * 0.5;
+      const hz = (sh[2] + el[2]) * 0.5;
+      const abx = hx - sh[0];
+      const aby = hy - sh[1];
+      const abz = hz - sh[2];
+      const abLenSq = abx * abx + aby * aby + abz * abz;
+      const tSeg = abLenSq > 1e-8
+        ? clamp(((vx - sh[0]) * abx + (vy - sh[1]) * aby + (vz - sh[2]) * abz) / abLenSq, 0, 1)
+        : 0;
+      const cx = sh[0] + abx * tSeg;
+      const cy = sh[1] + aby * tSeg;
+      const cz = sh[2] + abz * tSeg;
+      const dHumerus = Math.hypot(vx - cx, vy - cy, vz - cz);
+      const wArm =
+        Math.exp(-Math.pow(dHumerus / 0.065, 2)) *
+        smoothstep(sh[1] - 0.16, sh[1] - 0.02, vy);
       return { jA: 'thorax', jB: shId, wB: wArm };
     }
 
@@ -496,19 +505,29 @@ function computeVertexJointPairAndWeight(
   const sx = Math.abs(sh[0]);
   const absX = Math.abs(vx);
 
-  // Strict Axilla / Shoulder gate for wide chest/back muscles in torso zone
-  if (vy > lumbarY && vy >= sh[1] - 0.055 && absX >= sx - 0.03) {
-    const dInsertion = Math.hypot(
-      vx - sh[0] * 1.08,
-      vy - (sh[1] - 0.02),
-      vz - sh[2]
-    );
-    if (dInsertion <= 0.095) {
-      const shId = `shoulder_${shSide}` as JointId;
-      const wArm = Math.pow(smoothstep(0.095, 0.03, dInsertion), 2.0) * 0.85;
-      if (wArm > 1e-4) {
-        return { jA: 'thorax', jB: shId, wB: wArm };
-      }
+  // Continuous Gaussian humerus-axis gate for wide chest/back muscles in torso zone
+  if (vy > lumbarY && vy > sh[1] - 0.16 && absX >= sx - 0.08) {
+    const shId = `shoulder_${shSide}` as JointId;
+    const el = r[`elbow_${shSide}` as JointId];
+    const hx = (sh[0] + el[0]) * 0.5;
+    const hy = (sh[1] + el[1]) * 0.5;
+    const hz = (sh[2] + el[2]) * 0.5;
+    const abx = hx - sh[0];
+    const aby = hy - sh[1];
+    const abz = hz - sh[2];
+    const abLenSq = abx * abx + aby * aby + abz * abz;
+    const tSeg = abLenSq > 1e-8
+      ? clamp(((vx - sh[0]) * abx + (vy - sh[1]) * aby + (vz - sh[2]) * abz) / abLenSq, 0, 1)
+      : 0;
+    const cx = sh[0] + abx * tSeg;
+    const cy = sh[1] + aby * tSeg;
+    const cz = sh[2] + abz * tSeg;
+    const dHumerus = Math.hypot(vx - cx, vy - cy, vz - cz);
+    const wArm =
+      Math.exp(-Math.pow(dHumerus / 0.065, 2)) *
+      smoothstep(sh[1] - 0.16, sh[1] - 0.02, vy);
+    if (wArm > 1e-4) {
+      return { jA: 'thorax', jB: shId, wB: wArm };
     }
   }
 
@@ -633,6 +652,58 @@ export function prepareAutoSkinnedMuscle(
   }
 
   posAttr.needsUpdate = true;
+
+  // 3 iterations of topological Laplacian weight smoothing for cross-joint muscles
+  const indexAttr = mesh.geometry.getIndex();
+  if (indexAttr && usedSet.size > 1) {
+    const neighbors: number[][] = Array.from({ length: count }, () => []);
+    const idxArr = indexAttr.array;
+    for (let t = 0; t + 2 < idxArr.length; t += 3) {
+      const a = idxArr[t];
+      const b = idxArr[t + 1];
+      const c = idxArr[t + 2];
+      neighbors[a].push(b, c);
+      neighbors[b].push(a, c);
+      neighbors[c].push(a, b);
+    }
+    const wNext = new Float32Array(count);
+    for (let iter = 0; iter < 3; iter++) {
+      for (let i = 0; i < count; i++) {
+        const nbrs = neighbors[i];
+        if (nbrs.length === 0) {
+          wNext[i] = weightsB[i];
+          continue;
+        }
+        const ja = jointAIndices[i];
+        const jb = jointBIndices[i];
+        let sum = 0;
+        let cnt = 0;
+        for (let k = 0; k < nbrs.length; k++) {
+          const nb = nbrs[k];
+          if (jointAIndices[nb] === ja && jointBIndices[nb] === jb) {
+            sum += weightsB[nb];
+            cnt++;
+          }
+        }
+        wNext[i] = cnt > 0 ? clamp(0.55 * weightsB[i] + 0.45 * (sum / cnt), 0, 1) : weightsB[i];
+      }
+      weightsB.set(wNext);
+    }
+  }
+
+  // Write static GPU DQS attributes (aBoneIndex, aBoneWeight)
+  const aBoneIndex = new Float32Array(count * 2);
+  const aBoneWeight = new Float32Array(count * 2);
+  for (let i = 0; i < count; i++) {
+    const i2 = i * 2;
+    aBoneIndex[i2] = jointAIndices[i];
+    aBoneIndex[i2 + 1] = jointBIndices[i];
+    const wb = weightsB[i];
+    aBoneWeight[i2] = 1 - wb;
+    aBoneWeight[i2 + 1] = wb;
+  }
+  mesh.geometry.setAttribute('aBoneIndex', new Float32BufferAttribute(aBoneIndex, 2));
+  mesh.geometry.setAttribute('aBoneWeight', new Float32BufferAttribute(aBoneWeight, 2));
 
   const usedJoints = Array.from(usedSet);
   const primaryJoint = usedJoints[0] ?? 'pelvis';

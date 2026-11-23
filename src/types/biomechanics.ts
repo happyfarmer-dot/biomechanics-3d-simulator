@@ -170,10 +170,19 @@ export interface InjuryAlert {
   valueText?: string;
 }
 
+export type PresetCategory =
+  | 'strength'
+  | 'bodyweight'
+  | 'sports'
+  | 'mobility'
+  | 'ergonomics';
+
 export interface PresetPose {
   id: string;
   name: string;
   description: string;
+  category?: PresetCategory;
+  targetMuscles?: string[];
   pose: PoseMap;
   forces: SpatialForce[];
   includeGravity: boolean;

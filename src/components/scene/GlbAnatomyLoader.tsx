@@ -89,6 +89,7 @@ function RealAnatomyModel({
   const setCalibratedOffsets = useSimStore((s) => s.setCalibratedOffsets);
   const setIntegrityReport = useSimStore((s) => s.setIntegrityReport);
   const setMuscleStrainSummary = useSimStore((s) => s.setMuscleStrainSummary);
+  const skinOpacity = useSimStore((s) => s.skinOpacity);
   const placeForceAtPoint = useSimStore((s) => s.placeForceAtPoint);
   const selectNearestJointAtPoint = useSimStore((s) => s.selectNearestJointAtPoint);
   const [pointerDownPos, setPointerDownPos] = useState<{ x: number; y: number } | null>(null);
@@ -418,6 +419,37 @@ function RealAnatomyModel({
                 }
               }}
             />
+          );
+        })}
+
+      {/* Smooth Anatomical Skin Shell (shared DQS skinning, natural #ddb59b translucent skin) */}
+      {layers.skin &&
+        muscleBindings.map((m, idx) => {
+          const isGhosted = Boolean(
+            activeMacroSet &&
+              m.skinned.usedJoints.every((jid) => !activeMacroSet.has(jid))
+          );
+          if (isGhosted) return null;
+          return (
+            <mesh
+              key={`skin_shell_${m.name}_${idx}`}
+              geometry={m.skinned.geometry}
+              frustumCulled={false}
+            >
+              <meshPhysicalMaterial
+                color="#ddb59b"
+                roughness={0.65}
+                metalness={0.0}
+                clearcoat={0.12}
+                clearcoatRoughness={0.55}
+                transparent
+                opacity={skinOpacity}
+                depthWrite={false}
+                polygonOffset
+                polygonOffsetFactor={-2}
+                polygonOffsetUnits={-2}
+              />
+            </mesh>
           );
         })}
     </group>

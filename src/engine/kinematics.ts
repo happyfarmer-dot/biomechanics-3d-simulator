@@ -173,3 +173,47 @@ export function computeKinematics(
 
   return { joints };
 }
+
+/**
+ * Scapulohumeral Rhythm (classic ~2:1 approximation):
+ * When shoulder abduction or flexion exceeds 30 deg, the clavicle/scapula
+ * elevates and upward-rotates at ~28% of the excess angle.
+ */
+export function computeClavicleWorldState(
+  side: 'L' | 'R',
+  pose: PoseMap,
+  thorax: JointWorldState,
+  shoulderRestPos: Vec3
+): { worldPosition: Vec3; worldQuaternion: Quat; restPosition: Vec3 } {
+  const shAngles = pose[`shoulder_${side}` as JointId];
+  const excess = Math.max(0, Math.max(shAngles.abduction, shAngles.flexion) - 30);
+  const clavDeg = Math.min(28, excess * 0.28);
+  const sign = side === 'L' ? 1 : -1;
+
+  const thoraxQuat = new Quaternion(...thorax.worldQuaternion);
+  const localQuat = new Quaternion().setFromEuler(
+    new Euler(0, -sign * clavDeg * 0.25 * DEG2RAD, sign * clavDeg * DEG2RAD, 'ZXY')
+  );
+  const worldQuat = thoraxQuat.clone().multiply(localQuat);
+
+  // Sternoclavicular pivot near medial clavicle
+  const pivotRest: Vec3 = [sign * 0.025, shoulderRestPos[1] + 0.015, shoulderRestPos[2] + 0.02];
+  const thoraxRestY = 1.239;
+  const relFromThorax = new Vector3(
+    pivotRest[0],
+    pivotRest[1] - thoraxRestY,
+    pivotRest[2]
+  ).applyQuaternion(thoraxQuat);
+  const worldPos: Vec3 = [
+    thorax.worldPosition[0] + relFromThorax.x,
+    thorax.worldPosition[1] + relFromThorax.y,
+    thorax.worldPosition[2] + relFromThorax.z,
+  ];
+
+  return {
+    worldPosition: worldPos,
+    worldQuaternion: [worldQuat.x, worldQuat.y, worldQuat.z, worldQuat.w],
+    restPosition: pivotRest,
+  };
+}
+

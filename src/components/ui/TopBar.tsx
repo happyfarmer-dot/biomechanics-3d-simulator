@@ -1,22 +1,64 @@
 import {
   AlertTriangle,
   ArrowUpRight,
+  Check,
+  ChevronDown,
   Info,
   Move3d,
   RotateCcw,
+  Share2,
   ShieldAlert,
   ShieldCheck,
   X,
 } from 'lucide-react';
-import { useState } from 'react';
+import { useEffect, useState } from 'react';
 import { PRESET_POSES } from '../../data/presetPoses';
 import { useSimStore } from '../../store/useSimStore';
+import { decodeSimStateFromHash, encodeSimStateToHash } from '../../utils/urlState';
+import { PresetLibraryModal } from './PresetLibraryModal';
 
 export function TopBar() {
   const [showInfo, setShowInfo] = useState(false);
+  const [presetModalOpen, setPresetModalOpen] = useState(false);
+  const [copiedShare, setCopiedShare] = useState(false);
+
+  useEffect(() => {
+    const decoded = decodeSimStateFromHash(window.location.hash);
+    if (decoded) {
+      useSimStore.setState((s) => ({
+        ...s,
+        pose: decoded.pose,
+        forces: decoded.forces,
+        dynamicLoadFactor: decoded.dynamicLoadFactor ?? s.dynamicLoadFactor,
+        muscleEffectMode: decoded.muscleEffectMode ?? s.muscleEffectMode,
+        muscleStrainSubMode: decoded.muscleStrainSubMode ?? s.muscleStrainSubMode,
+        activePresetId: null,
+      }));
+    }
+  }, []);
+
+  const handleShare = async () => {
+    const s = useSimStore.getState();
+    const hash = encodeSimStateToHash({
+      pose: s.pose,
+      forces: s.forces,
+      dynamicLoadFactor: s.dynamicLoadFactor,
+      muscleEffectMode: s.muscleEffectMode,
+      muscleStrainSubMode: s.muscleStrainSubMode,
+    });
+    const url = `${window.location.origin}${window.location.pathname}${hash}`;
+    window.history.replaceState(null, '', hash);
+    try {
+      await navigator.clipboard.writeText(url);
+      setCopiedShare(true);
+      setTimeout(() => setCopiedShare(false), 2000);
+    } catch {
+      setCopiedShare(true);
+      setTimeout(() => setCopiedShare(false), 2000);
+    }
+  };
 
   const activePresetId = useSimStore((s) => s.activePresetId);
-  const applyPreset = useSimStore((s) => s.applyPreset);
   const resetPose = useSimStore((s) => s.resetPose);
   const interactionMode = useSimStore((s) => s.interactionMode);
   const setInteractionMode = useSimStore((s) => s.setInteractionMode);
@@ -61,22 +103,20 @@ export function TopBar() {
           </button>
         </div>
 
-        {/* 情境選單 */}
-        <select
-          aria-label="情境選單"
-          value={activePresetId ?? ''}
-          onChange={(e) => {
-            if (e.target.value) applyPreset(e.target.value);
-          }}
-          className="min-w-0 flex-1 max-w-[155px] rounded-lg border border-slate-700 bg-slate-900 px-1.5 py-1 text-[11px] text-slate-100 focus:border-sky-500 focus:outline-none cursor-pointer truncate"
+        {/* 情境／姿勢庫按鈕 */}
+        <button
+          type="button"
+          data-testid="open-preset-library-btn"
+          onClick={() => setPresetModalOpen(true)}
+          className="flex min-w-0 flex-1 max-w-[165px] items-center justify-between gap-1 rounded-lg border border-slate-700 bg-slate-900 px-2 py-1 text-[11px] text-slate-100 hover:border-sky-500 focus:outline-none cursor-pointer"
         >
-          {!activePresetId && <option value="">自訂姿勢</option>}
-          {PRESET_POSES.map((p) => (
-            <option key={p.id} value={p.id}>
-              {p.name}
-            </option>
-          ))}
-        </select>
+          <span className="truncate">
+            {PRESET_POSES.find((p) => p.id === activePresetId)?.name ?? '自訂姿勢'}
+          </span>
+          <ChevronDown className="h-3.5 w-3.5 shrink-0 text-slate-400" />
+        </button>
+
+        <PresetLibraryModal open={presetModalOpen} onClose={() => setPresetModalOpen(false)} />
 
         {/* 腰椎負荷 + 重置 + 資訊 */}
         <div className="flex shrink-0 items-center gap-1 text-[11px]">
@@ -98,6 +138,17 @@ export function TopBar() {
             )}
             <span>{Math.round(lumbarCompression)}N</span>
           </div>
+
+          <button
+            type="button"
+            data-testid="share-state-btn"
+            onClick={handleShare}
+            title="分享此情境連結"
+            aria-label="分享此情境連結"
+            className="rounded-md border border-slate-700 bg-slate-900 p-1 text-slate-300 hover:border-sky-500 hover:text-sky-300 cursor-pointer"
+          >
+            {copiedShare ? <Check className="h-3.5 w-3.5 text-emerald-400" /> : <Share2 className="h-3.5 w-3.5" />}
+          </button>
 
           <button
             type="button"

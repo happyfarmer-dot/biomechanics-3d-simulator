@@ -1,4 +1,5 @@
 import type { PoseMap, PresetPose } from '../types/biomechanics';
+import { EXTRA_PRESET_POSES } from './presetPosesExtra';
 import { createNeutralPose } from './skeletonConfig';
 
 function withOverrides(overrides: Partial<PoseMap>): PoseMap {
@@ -119,4 +120,5 @@ export const PRESET_POSES: PresetPose[] = [
     focusJointId: 'shoulder_R',
     interactionMode: 'pose',
   },
+  ...EXTRA_PRESET_POSES,
 ];

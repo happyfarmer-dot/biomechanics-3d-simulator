@@ -1,0 +1,86 @@
+import { Pause, Play } from 'lucide-react';
+import { useEffect, useState } from 'react';
+import { ACTION_TRAJECTORIES, interpolatePoseSlerp } from '../../data/actionTrajectories';
+import { useSimStore } from '../../store/useSimStore';
+
+export function ActionScrubber() {
+  const activePresetId = useSimStore((s) => s.activePresetId);
+  const trajectory = activePresetId ? ACTION_TRAJECTORIES[activePresetId] : undefined;
+
+  const [progress, setProgress] = useState(1);
+  const [playing, setPlaying] = useState(false);
+
+  useEffect(() => {
+    setProgress(1);
+    setPlaying(false);
+  }, [activePresetId]);
+
+  useEffect(() => {
+    if (!playing || !trajectory) return;
+    let rafId = 0;
+    let last = performance.now();
+    const tick = (now: number) => {
+      const dt = Math.min(0.05, (now - last) / 1000);
+      last = now;
+      setProgress((prev) => {
+        const next = prev + dt * 0.45;
+        const wrapped = next > 1 ? 0 : next;
+        const pose = interpolatePoseSlerp(trajectory.keyframes, wrapped);
+        useSimStore.setState((s) => ({ ...s, pose }));
+        return wrapped;
+      });
+      rafId = requestAnimationFrame(tick);
+    };
+    rafId = requestAnimationFrame(tick);
+    return () => cancelAnimationFrame(rafId);
+  }, [playing, trajectory]);
+
+  if (!trajectory) return null;
+
+  const currentStage =
+    trajectory.keyframes.reduce((best, kf) =>
+      Math.abs(kf.t - progress) < Math.abs(best.t - progress) ? kf : best
+    )?.label ?? '';
+
+  return (
+    <div
+      data-testid="action-scrubber"
+      className="pointer-events-auto absolute bottom-14 left-1/2 z-20 flex w-[92%] max-w-md -translate-x-1/2 items-center gap-2.5 rounded-xl border border-slate-700/80 bg-slate-950/90 px-3 py-2 shadow-2xl backdrop-blur-md"
+    >
+      <button
+        type="button"
+        data-testid="action-scrubber-play"
+        onClick={() => setPlaying((p) => !p)}
+        aria-label={playing ? '暫停' : '播放'}
+        className="flex h-7 w-7 shrink-0 items-center justify-center rounded-lg border border-sky-500/40 bg-sky-500/20 text-sky-300 hover:bg-sky-500/30 cursor-pointer"
+      >
+        {playing ? <Pause className="h-3.5 w-3.5" /> : <Play className="h-3.5 w-3.5" />}
+      </button>
+
+      <div className="flex min-w-0 flex-1 flex-col gap-1">
+        <div className="flex items-center justify-between text-[10px]">
+          <span className="font-semibold text-slate-200 truncate">{trajectory.title}</span>
+          <span className="font-mono text-sky-300">
+            {currentStage} · {Math.round(progress * 100)}%
+          </span>
+        </div>
+        <input
+          type="range"
+          data-testid="action-scrubber-slider"
+          min={0}
+          max={100}
+          step={1}
+          value={Math.round(progress * 100)}
+          onChange={(e) => {
+            setPlaying(false);
+            const t = Number(e.target.value) / 100;
+            setProgress(t);
+            const pose = interpolatePoseSlerp(trajectory.keyframes, t);
+            useSimStore.setState((s) => ({ ...s, pose }));
+          }}
+          className="h-1.5 w-full accent-sky-400 cursor-pointer"
+        />
+      </div>
+    </div>
+  );
+}

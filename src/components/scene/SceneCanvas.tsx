@@ -5,6 +5,7 @@ import { useSimStore } from '../../store/useSimStore';
 import { CameraRig } from './CameraRig';
 import { GlbAnatomyLoader } from './GlbAnatomyLoader';
 import { HumanRig } from './HumanRig';
+import { MomentArmOverlay } from './MomentArmOverlay';
 import { JointGizmo } from './JointGizmo';
 import { JointMacroDetail } from './JointMacroDetail';
 import { MuscleMeshes } from './MuscleMeshes';
@@ -119,6 +120,7 @@ export function SceneCanvas() {
 
         <GlbAnatomyLoader onExternalActive={setExternalGlbActive} />
         <HumanRig hideProceduralBones={externalGlbActive} />
+        <MomentArmOverlay />
         {!externalGlbActive && <MuscleMeshes />}
 
         <JointMacroDetail />

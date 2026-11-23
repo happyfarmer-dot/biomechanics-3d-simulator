@@ -50,6 +50,11 @@ interface SimState {
   useTouchPad: boolean;
   showJointHandles: boolean;
   muscleEffectMode: 'anatomy' | 'strain';
+  muscleStrainSubMode: 'geometric' | 'activeTension';
+  dynamicLoadFactor: number;
+  sexProfile: 'male' | 'female';
+  romToleranceBoost: boolean;
+  skinOpacity: number;
   muscleStrainSummary: MuscleStrainSummary;
   activePresetId: string | null;
   modelStatus: { state: 'loading' | 'loaded' | 'error'; message?: string };
@@ -73,6 +78,11 @@ interface SimState {
   setUseTouchPad: (use: boolean) => void;
   setShowJointHandles: (show: boolean) => void;
   setMuscleEffectMode: (mode: 'anatomy' | 'strain') => void;
+  setMuscleStrainSubMode: (mode: 'geometric' | 'activeTension') => void;
+  setDynamicLoadFactor: (factor: number) => void;
+  setSexProfile: (sex: 'male' | 'female') => void;
+  setRomToleranceBoost: (boost: boolean) => void;
+  setSkinOpacity: (opacity: number) => void;
   setMuscleStrainSummary: (summary: MuscleStrainSummary) => void;
   selectNearestJointAtPoint: (worldPoint: Vec3) => void;
   setSelectedJoint: (jointId: JointId | null) => void;
@@ -153,6 +163,11 @@ export const useSimStore = create<SimState>((set, get) => ({
   useTouchPad: true,
   showJointHandles: false,
   muscleEffectMode: 'anatomy',
+  muscleStrainSubMode: 'geometric',
+  dynamicLoadFactor: 1.0,
+  sexProfile: 'male',
+  romToleranceBoost: false,
+  skinOpacity: 0.45,
   muscleStrainSummary: { topContracting: [], topStretching: [] },
   activePresetId: 'neutral_standing',
   modelStatus: { state: 'loading' },
@@ -171,6 +186,12 @@ export const useSimStore = create<SimState>((set, get) => ({
   setUseTouchPad: (useTouchPad) => set({ useTouchPad }),
   setShowJointHandles: (showJointHandles) => set({ showJointHandles }),
   setMuscleEffectMode: (muscleEffectMode) => set({ muscleEffectMode }),
+  setMuscleStrainSubMode: (muscleStrainSubMode) => set({ muscleStrainSubMode }),
+  setDynamicLoadFactor: (dynamicLoadFactor) =>
+    set({ dynamicLoadFactor: Math.max(1.0, Math.min(3.0, dynamicLoadFactor)) }),
+  setSexProfile: (sexProfile) => set({ sexProfile }),
+  setRomToleranceBoost: (romToleranceBoost) => set({ romToleranceBoost }),
+  setSkinOpacity: (skinOpacity) => set({ skinOpacity: Math.max(0.15, Math.min(1, skinOpacity)) }),
   setMuscleStrainSummary: (muscleStrainSummary) => set({ muscleStrainSummary }),
 
   selectNearestJointAtPoint: (worldPoint) => {
