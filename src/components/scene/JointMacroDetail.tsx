@@ -8,9 +8,9 @@ import type { RiskSeverity, SoftTissueDef } from '../../types/biomechanics';
 const UP = new Vector3(0, 1, 0);
 
 const RISK_COLORS: Record<RiskSeverity, { color: string; emissive: string; intensity: number }> = {
-  normal: { color: '#22c55e', emissive: '#14532d', intensity: 0.25 },
-  warning: { color: '#facc15', emissive: '#854d0e', intensity: 0.65 },
-  critical: { color: '#ef4444', emissive: '#dc2626', intensity: 1.1 },
+  normal: { color: '#38bdf8', emissive: '#0284c7', intensity: 0.45 },
+  warning: { color: '#facc15', emissive: '#ca8a04', intensity: 0.75 },
+  critical: { color: '#ef4444', emissive: '#dc2626', intensity: 1.05 },
 };
 
 function SoftTissueMesh({
@@ -23,8 +23,8 @@ function SoftTissueMesh({
   scale: number;
 }) {
   const { midpoint, length, quaternion } = useMemo(() => {
-    const p0 = new Vector3(...def.localStart).multiplyScalar(scale);
-    const p1 = new Vector3(...def.localEnd).multiplyScalar(scale);
+    const p0 = new Vector3(...def.localStart).multiplyScalar(scale * 0.72);
+    const p1 = new Vector3(...def.localEnd).multiplyScalar(scale * 0.72);
     const diff = p1.clone().sub(p0);
     const len = Math.max(diff.length(), 0.004);
     const mid = p0.clone().add(p1).multiplyScalar(0.5);
@@ -37,38 +37,62 @@ function SoftTissueMesh({
   }, [def, scale]);
 
   const style = RISK_COLORS[status];
-  const r = def.radius * scale;
+  const r = def.radius * scale * 0.58;
 
   return (
     <group position={midpoint} quaternion={quaternion}>
       {def.shape === 'disc' ? (
-        <mesh>
-          <cylinderGeometry args={[r, r, length, 20]} />
-          <meshStandardMaterial
-            color={style.color}
-            emissive={style.emissive}
-            emissiveIntensity={style.intensity}
-            roughness={0.35}
-          />
-        </mesh>
+        <group>
+          {/* Delicate glowing mechanical force ring inside joint cavity */}
+          <mesh rotation={[Math.PI / 2, 0, 0]}>
+            <torusGeometry args={[Math.min(r * 1.4, 0.018 * scale), 0.0022 * scale, 10, 28]} />
+            <meshStandardMaterial
+              color={style.color}
+              emissive={style.emissive}
+              emissiveIntensity={style.intensity}
+              roughness={0.25}
+              transparent
+              opacity={0.72}
+              depthWrite={false}
+            />
+          </mesh>
+          <mesh>
+            <cylinderGeometry args={[Math.min(r * 0.85, 0.012 * scale), Math.min(r * 0.85, 0.012 * scale), Math.min(length * 0.65, 0.014 * scale), 18]} />
+            <meshStandardMaterial
+              color={style.color}
+              emissive={style.emissive}
+              emissiveIntensity={style.intensity * 0.5}
+              roughness={0.35}
+              transparent
+              opacity={0.38}
+              depthWrite={false}
+            />
+          </mesh>
+        </group>
       ) : def.shape === 'meniscus' ? (
         <mesh rotation={[Math.PI / 2, 0, 0]}>
-          <torusGeometry args={[r * 0.85, r * 0.35, 10, 20, Math.PI * 1.3]} />
-          <meshStandardMaterial
-            color={style.color}
-            emissive={style.emissive}
-            emissiveIntensity={style.intensity}
-            roughness={0.35}
-          />
-        </mesh>
-      ) : (
-        <mesh>
-          <capsuleGeometry args={[r, Math.max(length * 0.7, 0.004), 8, 12]} />
+          <torusGeometry args={[r * 0.85, r * 0.28, 10, 20, Math.PI * 1.25]} />
           <meshStandardMaterial
             color={style.color}
             emissive={style.emissive}
             emissiveIntensity={style.intensity}
             roughness={0.3}
+            transparent
+            opacity={0.62}
+            depthWrite={false}
+          />
+        </mesh>
+      ) : (
+        <mesh>
+          <capsuleGeometry args={[Math.min(r * 0.65, 0.0045 * scale), Math.max(length * 0.65, 0.004), 8, 12]} />
+          <meshStandardMaterial
+            color={style.color}
+            emissive={style.emissive}
+            emissiveIntensity={style.intensity}
+            roughness={0.3}
+            transparent
+            opacity={0.65}
+            depthWrite={false}
           />
         </mesh>
       )}

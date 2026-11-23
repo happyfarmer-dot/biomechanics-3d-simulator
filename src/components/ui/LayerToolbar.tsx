@@ -42,6 +42,8 @@ export function LayerToolbar() {
   const setUseTouchPad = useSimStore((s) => s.setUseTouchPad);
   const showJointHandles = useSimStore((s) => s.showJointHandles);
   const setShowJointHandles = useSimStore((s) => s.setShowJointHandles);
+  const muscleEffectMode = useSimStore((s) => s.muscleEffectMode);
+  const setMuscleEffectMode = useSimStore((s) => s.setMuscleEffectMode);
 
   useEffect(() => {
     if (!expanded) return;
@@ -54,8 +56,10 @@ export function LayerToolbar() {
     return () => window.removeEventListener('pointerdown', onPointerDown);
   }, [expanded]);
 
+  const isStrainMode = muscleEffectMode === 'strain';
+
   return (
-    <div ref={containerRef} className="pointer-events-auto absolute left-3 top-3 z-20">
+    <div ref={containerRef} className="pointer-events-auto absolute left-3 top-3 z-20 flex flex-col items-start gap-2">
       <button
         type="button"
         onClick={() => setExpanded((v) => !v)}
@@ -70,8 +74,24 @@ export function LayerToolbar() {
         <Layers className="h-4 w-4" />
       </button>
 
+      {/* 一鍵切換肌群收縮/拉伸特效模式 */}
+      <button
+        type="button"
+        data-testid="muscle-effect-toggle"
+        onClick={() => setMuscleEffectMode(isStrainMode ? 'anatomy' : 'strain')}
+        title="切換肌肉收縮／拉伸特效"
+        className={`flex items-center gap-1 rounded-full border px-2.5 py-1 text-[11px] font-medium shadow-lg backdrop-blur-md transition-colors cursor-pointer ${
+          isStrainMode
+            ? 'border-amber-400/70 bg-gradient-to-r from-amber-500/25 to-sky-500/25 text-amber-100'
+            : 'border-slate-700/80 bg-slate-950/85 text-slate-300 hover:border-slate-500'
+        }`}
+      >
+        <Zap className={`h-3 w-3 ${isStrainMode ? 'text-amber-300' : 'text-slate-400'}`} />
+        <span>肌群特效</span>
+      </button>
+
       {expanded && (
-        <div className="mt-2 w-48 rounded-xl border border-slate-700/80 bg-slate-950/90 p-2.5 shadow-2xl backdrop-blur-md space-y-2.5">
+        <div className="w-48 rounded-xl border border-slate-700/80 bg-slate-950/90 p-2.5 shadow-2xl backdrop-blur-md space-y-2.5">
           <div className="space-y-1">
             {LAYER_ITEMS.map(({ key, label, icon: Icon }) => {
               const active = layers[key];
@@ -101,6 +121,16 @@ export function LayerToolbar() {
           </div>
 
           <div className="border-t border-slate-800 pt-2 space-y-2">
+            <label className="flex items-center justify-between text-[11px] text-slate-300 cursor-pointer">
+              <span>肌群收縮/拉伸特效</span>
+              <input
+                type="checkbox"
+                checked={isStrainMode}
+                onChange={(e) => setMuscleEffectMode(e.target.checked ? 'strain' : 'anatomy')}
+                className="h-3.5 w-3.5 accent-amber-500 cursor-pointer"
+              />
+            </label>
+
             <label className="flex items-center justify-between text-[11px] text-slate-300 cursor-pointer">
               <span>顯示關節球</span>
               <input

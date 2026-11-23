@@ -9,6 +9,7 @@ import {
 import { computeKinematics } from '../engine/kinematics';
 import { mapJointSoftTissueLoads } from '../engine/ligamentLoadMapper';
 import { evaluateMuscles } from '../engine/muscleEvaluator';
+import type { MuscleStrainSummary } from '../engine/muscleStrainTracker';
 import type { RigIntegrityReport } from '../engine/rigIntegrityCheck';
 import { evaluateAllInjuries, getJointRiskMap } from '../engine/romEvaluator';
 import { computeStatics } from '../engine/staticsEngine';
@@ -48,6 +49,8 @@ interface SimState {
   isDraggingGizmo: boolean;
   useTouchPad: boolean;
   showJointHandles: boolean;
+  muscleEffectMode: 'anatomy' | 'strain';
+  muscleStrainSummary: MuscleStrainSummary;
   activePresetId: string | null;
   modelStatus: { state: 'loading' | 'loaded' | 'error'; message?: string };
   calibratedOffsets: Record<JointId, Vec3> | null;
@@ -69,6 +72,8 @@ interface SimState {
   setCameraVectors: (vecs: CameraVectors) => void;
   setUseTouchPad: (use: boolean) => void;
   setShowJointHandles: (show: boolean) => void;
+  setMuscleEffectMode: (mode: 'anatomy' | 'strain') => void;
+  setMuscleStrainSummary: (summary: MuscleStrainSummary) => void;
   selectNearestJointAtPoint: (worldPoint: Vec3) => void;
   setSelectedJoint: (jointId: JointId | null) => void;
   setFocusedJoint: (jointId: JointId | null) => void;
@@ -147,6 +152,8 @@ export const useSimStore = create<SimState>((set, get) => ({
   isDraggingGizmo: false,
   useTouchPad: true,
   showJointHandles: false,
+  muscleEffectMode: 'anatomy',
+  muscleStrainSummary: { topContracting: [], topStretching: [] },
   activePresetId: 'neutral_standing',
   modelStatus: { state: 'loading' },
   calibratedOffsets: null,
@@ -163,6 +170,8 @@ export const useSimStore = create<SimState>((set, get) => ({
   setCameraVectors: (cameraVectors) => set({ cameraVectors }),
   setUseTouchPad: (useTouchPad) => set({ useTouchPad }),
   setShowJointHandles: (showJointHandles) => set({ showJointHandles }),
+  setMuscleEffectMode: (muscleEffectMode) => set({ muscleEffectMode }),
+  setMuscleStrainSummary: (muscleStrainSummary) => set({ muscleStrainSummary }),
 
   selectNearestJointAtPoint: (worldPoint) => {
     const s = get();

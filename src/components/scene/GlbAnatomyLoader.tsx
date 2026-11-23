@@ -1,6 +1,7 @@
 import { useGLTF } from '@react-three/drei';
-import { Component, Suspense, useEffect, useMemo, useState, type ReactNode } from 'react';
-import { Mesh, Vector3 } from 'three';
+import { useFrame } from '@react-three/fiber';
+import { Component, Suspense, useEffect, useMemo, useRef, useState, type ReactNode } from 'react';
+import { Color, Mesh, MeshStandardMaterial, Vector3 } from 'three';
 import {
   DEFAULT_HEIGHT_M,
   JOINT_ORDER,
@@ -15,13 +16,20 @@ import {
   updateSkinnedMuscleVertices,
   type SkinnedMuscleData,
 } from '../../engine/muscleSkinning';
+import {
+  buildMuscleStrainSummary,
+  computeMuscleStrain,
+  createMuscleStrainTracker,
+  getStrainHeatmapVisual,
+  type MuscleStrainTracker,
+} from '../../engine/muscleStrainTracker';
 import { runRigIntegrityCheck } from '../../engine/rigIntegrityCheck';
 import { useSimStore } from '../../store/useSimStore';
 import type { JointId, RiskSeverity, Vec3 } from '../../types/biomechanics';
 import {
+  createIndependentZAnatomyMuscleMaterial,
   getSkinFresnelMaterial,
   getZAnatomyBoneMaterial,
-  getZAnatomyMuscleMaterial,
 } from '../../utils/anatomyTextures';
 
 const DRACO_PATH = `${import.meta.env.BASE_URL}draco/`;
@@ -41,6 +49,8 @@ interface MuscleBinding {
   name: string;
   jointId: JointId;
   skinned: SkinnedMuscleData;
+  tracker: MuscleStrainTracker;
+  material: MeshStandardMaterial;
 }
 
 class GlbSilentBoundary extends Component<
@@ -74,9 +84,11 @@ function RealAnatomyModel({
   const focusedJointId = useSimStore((s) => s.focusedJointId);
   const jointRiskMap = useSimStore((s) => s.jointRiskMap);
   const interactionMode = useSimStore((s) => s.interactionMode);
+  const muscleEffectMode = useSimStore((s) => s.muscleEffectMode);
   const setModelStatus = useSimStore((s) => s.setModelStatus);
   const setCalibratedOffsets = useSimStore((s) => s.setCalibratedOffsets);
   const setIntegrityReport = useSimStore((s) => s.setIntegrityReport);
+  const setMuscleStrainSummary = useSimStore((s) => s.setMuscleStrainSummary);
   const placeForceAtPoint = useSimStore((s) => s.placeForceAtPoint);
   const selectNearestJointAtPoint = useSimStore((s) => s.selectNearestJointAtPoint);
   const [pointerDownPos, setPointerDownPos] = useState<{ x: number; y: number } | null>(null);
@@ -116,7 +128,7 @@ function RealAnatomyModel({
     return () => setCalibratedOffsets(null);
   }, [calibration, setCalibratedOffsets]);
 
-  // Step 2: 100% Spatial Partitioning + Per-Vertex Auto-Skinning
+  // Step 2: 100% Spatial Partitioning + Per-Vertex Auto-Skinning + Strain Tracker
   const { boneBindings, muscleBindings, unassignedMeshCount } = useMemo(() => {
     const bones: BoneBinding[] = [];
     const muscles: MuscleBinding[] = [];
@@ -135,10 +147,14 @@ function RealAnatomyModel({
 
       if (nl.startsWith('muscle__') || nl.includes('muscle')) {
         const skinned = prepareAutoSkinnedMuscle(obj, zone, calibration);
+        const tracker = createMuscleStrainTracker(skinned);
+        const material = createIndependentZAnatomyMuscleMaterial();
         muscles.push({
           name: obj.name,
           jointId: skinned.primaryJoint,
           skinned,
+          tracker,
+          material,
         });
       } else {
         const kind: 'bone' | 'skin' = nl.includes('skin') ? 'skin' : 'bone';
@@ -195,10 +211,19 @@ function RealAnatomyModel({
     setIntegrityReport,
   ]);
 
-  // Step 3: Update only muscles whose used joints changed via DQS
+  // Step 3: Update only muscles whose used joints changed via DQS, and compute per-muscle geometric strain
   const prevJointSigRef = useMemo(() => new Map<number, string>(), []);
-  const stretchRatios = useMemo(() => {
-    const ratios = new Array<number>(muscleBindings.length);
+  const strainsRef = useRef<Float32Array>(new Float32Array(0));
+  const stretchRatiosRef = useRef<Float32Array>(new Float32Array(0));
+
+  const { stretchRatios, strains } = useMemo(() => {
+    if (strainsRef.current.length !== muscleBindings.length) {
+      strainsRef.current = new Float32Array(muscleBindings.length);
+      stretchRatiosRef.current = new Float32Array(muscleBindings.length).fill(1);
+    }
+    const ratios = stretchRatiosRef.current;
+    const curStrains = strainsRef.current;
+
     for (let i = 0; i < muscleBindings.length; i++) {
       const m = muscleBindings[i];
       let sig = `${heightM}`;
@@ -214,12 +239,31 @@ function RealAnatomyModel({
           heightM,
           calibration.restPositions
         );
-      } else {
-        ratios[i] = 1;
+        curStrains[i] = computeMuscleStrain(
+          m.tracker,
+          m.skinned.geometry.getAttribute('position'),
+          heightM
+        );
       }
     }
-    return ratios;
+    return { stretchRatios: ratios, strains: curStrains };
   }, [muscleBindings, kinematics, heightM, calibration.restPositions, prevJointSigRef]);
+
+  // Sync top contracting & stretching summary to store when heatmap mode is active
+  useEffect(() => {
+    if (muscleEffectMode !== 'strain') return;
+    const entries: Array<{ zhName: string; name: string; strain: number }> = [];
+    for (let i = 0; i < muscleBindings.length; i++) {
+      const t = muscleBindings[i].tracker;
+      if (t.skip) continue;
+      entries.push({
+        name: t.name,
+        zhName: t.zhName,
+        strain: strains[i] ?? 0,
+      });
+    }
+    setMuscleStrainSummary(buildMuscleStrainSummary(entries));
+  }, [muscleEffectMode, muscleBindings, strains, kinematics, heightM, setMuscleStrainSummary]);
 
   const activeMacroSet = useMemo(() => {
     if (!focusedJointId) return null;
@@ -231,6 +275,21 @@ function RealAnatomyModel({
     }
     return set;
   }, [focusedJointId]);
+
+  const tmpColor = useMemo(() => new Color(), []);
+  const tmpEmissive = useMemo(() => new Color(), []);
+
+  // Subtle breathing pulse for overstretched (> 30%) muscles in strain heatmap mode
+  useFrame(({ clock }) => {
+    if (muscleEffectMode !== 'strain') return;
+    const phase = clock.getElapsedTime() * 4.5;
+    const pulse = 0.5 + 0.5 * Math.sin(phase);
+    for (let i = 0; i < muscleBindings.length; i++) {
+      if ((strains[i] ?? 0) > 0.3) {
+        muscleBindings[i].material.emissiveIntensity = 0.45 + 0.18 * pulse;
+      }
+    }
+  });
 
   const hScale = heightM / DEFAULT_HEIGHT_M;
 
@@ -295,19 +354,53 @@ function RealAnatomyModel({
             activeMacroSet &&
               m.skinned.usedJoints.every((jid) => !activeMacroSet.has(jid))
           );
-          const stretch = stretchRatios[idx] ?? 1;
-          const jointRisk = jointRiskMap[m.jointId];
-          let status: RiskSeverity = jointRisk;
-          if (stretch > 1.3) status = 'critical';
-          else if (stretch > 1.15 && status === 'normal') status = 'warning';
+          let isMacroTranslucent = false;
+          if (focusedJointId && !isGhosted) {
+            const fp = calibration.restPositions[focusedJointId];
+            const mc = m.skinned.restCenter;
+            const dist = Math.hypot(mc[0] - fp[0], mc[1] - fp[1], mc[2] - fp[2]);
+            if (dist < 0.25) {
+              isMacroTranslucent = true;
+            }
+          }
 
-          const material = getZAnatomyMuscleMaterial(status, isGhosted);
+          const mat = m.material;
+          const isTransparent = isGhosted || isMacroTranslucent;
+          mat.transparent = isTransparent;
+          mat.opacity = isGhosted ? 0.14 : isMacroTranslucent ? 0.22 : 1;
+          mat.depthWrite = !isTransparent;
+
+          if (muscleEffectMode === 'strain') {
+            const strain = strains[idx] ?? 0;
+            const vis = getStrainHeatmapVisual(strain, tmpColor, tmpEmissive, 0);
+            mat.color.copy(vis.color);
+            mat.emissive.copy(vis.emissive);
+            mat.emissiveIntensity = vis.emissiveIntensity;
+          } else {
+            const stretch = stretchRatios[idx] ?? 1;
+            const jointRisk = jointRiskMap[m.jointId];
+            let status: RiskSeverity = jointRisk;
+            if (stretch > 1.3) status = 'critical';
+            else if (stretch > 1.15 && status === 'normal') status = 'warning';
+
+            mat.color.set('#8f3d37');
+            if (status === 'critical') {
+              mat.emissive.set('#dc2626');
+              mat.emissiveIntensity = 0.4;
+            } else if (status === 'warning') {
+              mat.emissive.set('#d97706');
+              mat.emissiveIntensity = 0.3;
+            } else {
+              mat.emissive.set('#000000');
+              mat.emissiveIntensity = 0;
+            }
+          }
 
           return (
             <mesh
               key={`muscle_${m.name}_${idx}`}
               geometry={m.skinned.geometry}
-              material={material}
+              material={mat}
               frustumCulled={false}
               visible
               onClick={(e) => {

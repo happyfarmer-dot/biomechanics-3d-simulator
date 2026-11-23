@@ -615,7 +615,7 @@ export function HumanRig({ hideProceduralBones = false }: { hideProceduralBones?
                     </group>
                   )}
 
-                  {(!hideProceduralBones || isFocused) && (
+                  {!hideProceduralBones && (
                     <JointInternalStructures
                       jointId={id}
                       scale={scale}

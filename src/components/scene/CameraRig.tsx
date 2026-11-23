@@ -63,12 +63,37 @@ export function CameraRig() {
 
     const j = kinematics.joints[focusedJointId];
     if (!j) return;
-    const [tx, ty, tz] = j.worldPosition;
+    let [tx, ty, tz] = j.worldPosition;
+
+    let dist = 0.72;
+    if (focusedJointId === 'head' || focusedJointId === 'neck') {
+      dist = 0.68;
+      const neckJ = kinematics.joints.neck;
+      const headJ = kinematics.joints.head;
+      if (neckJ && headJ) {
+        tx = (neckJ.worldPosition[0] + headJ.worldPosition[0]) * 0.5;
+        ty = (neckJ.worldPosition[1] + headJ.worldPosition[1]) * 0.5;
+        tz = (neckJ.worldPosition[2] + headJ.worldPosition[2]) * 0.5;
+      }
+    } else if (
+      focusedJointId.startsWith('wrist_') ||
+      focusedJointId.startsWith('ankle_')
+    ) {
+      dist = 0.42;
+    } else if (
+      focusedJointId.startsWith('elbow_') ||
+      focusedJointId.startsWith('knee_')
+    ) {
+      dist = 0.55;
+    } else {
+      dist = 0.72;
+    }
 
     const sideSign = focusedJointId.endsWith('_L') ? 1 : focusedJointId.endsWith('_R') ? -1 : 0.35;
-    const camX = tx + sideSign * 0.24;
-    const camY = ty + 0.08;
-    const camZ = tz + 0.49;
+    const dir = new Vector3(sideSign * 0.38, 0.14, 0.91).normalize();
+    const camX = tx + dir.x * dist;
+    const camY = ty + dir.y * dist;
+    const camZ = tz + dir.z * dist;
 
     ctrl.setLookAt(camX, camY, camZ, tx, ty, tz, true);
     // eslint-disable-next-line react-hooks/exhaustive-deps

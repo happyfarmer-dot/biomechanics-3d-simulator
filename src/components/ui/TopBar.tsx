@@ -201,6 +201,9 @@ export function TopBar() {
             )}
 
             <p className="leading-relaxed text-slate-400 text-[11px]">
+              色階反映肌群幾何縮短（向心位置）與拉伸（離心位置），實際生理發力須搭配施力方向綜合判讀。
+            </p>
+            <p className="leading-relaxed text-slate-400 text-[11px]">
               本系統為靜力學與活動度簡化教學模型，韌帶負荷為方向性受力估算，非臨床醫療診斷或有限元素分析。
             </p>
           </div>

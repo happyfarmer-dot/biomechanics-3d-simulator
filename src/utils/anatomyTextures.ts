@@ -389,9 +389,11 @@ export function getZAnatomyBoneMaterial(isGhosted: boolean): MeshStandardMateria
 
 export function getZAnatomyMuscleMaterial(
   status: 'normal' | 'warning' | 'critical',
-  isGhosted: boolean
+  isGhosted: boolean,
+  isMacroTranslucent: boolean = false
 ): MeshStandardMaterial {
-  const key = `${status}_${isGhosted ? 'ghost' : 'solid'}`;
+  const mode = isGhosted ? 'ghost' : isMacroTranslucent ? 'macro' : 'solid';
+  const key = `${status}_${mode}`;
   const existing = zMuscleMatCache.get(key);
   if (existing) return existing;
 
@@ -400,6 +402,9 @@ export function getZAnatomyMuscleMaterial(
     status === 'critical' ? '#dc2626' : status === 'warning' ? '#d97706' : '#000000';
   const emissiveIntensity =
     status === 'critical' ? 0.4 : status === 'warning' ? 0.3 : 0;
+
+  const isTransparent = isGhosted || isMacroTranslucent;
+  const opacity = isGhosted ? 0.14 : isMacroTranslucent ? 0.22 : 1;
 
   const mat = new MeshStandardMaterial({
     color: '#8f3d37',
@@ -411,11 +416,33 @@ export function getZAnatomyMuscleMaterial(
     side: DoubleSide,
     emissive,
     emissiveIntensity,
-    transparent: isGhosted,
-    opacity: isGhosted ? 0.14 : 1,
-    depthWrite: !isGhosted,
+    transparent: isTransparent,
+    opacity,
+    depthWrite: !isTransparent,
   });
 
   zMuscleMatCache.set(key, mat);
   return mat;
+}
+
+/**
+ * Creates an independent MeshStandardMaterial per Z-Anatomy muscle mesh while sharing
+ * the single cached bumpMap texture (zero extra GPU VRAM).
+ */
+export function createIndependentZAnatomyMuscleMaterial(): MeshStandardMaterial {
+  const tex = getMuscleTextures();
+  return new MeshStandardMaterial({
+    color: '#8f3d37',
+    bumpMap: tex.bumpMap,
+    bumpScale: 0.003,
+    metalness: 0.0,
+    roughness: 0.58,
+    envMapIntensity: 0.45,
+    side: DoubleSide,
+    emissive: '#000000',
+    emissiveIntensity: 0,
+    transparent: false,
+    opacity: 1,
+    depthWrite: true,
+  });
 }

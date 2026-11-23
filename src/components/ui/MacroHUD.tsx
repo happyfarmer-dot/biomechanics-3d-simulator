@@ -12,7 +12,7 @@ export function MacroHUD() {
   const jointName = SKELETON_CONFIG[focusedJointId].nameZh;
 
   return (
-    <div className="pointer-events-auto absolute left-1/2 top-3 z-10 -translate-x-1/2 w-[min(480px,calc(100%-6.5rem))] rounded-xl border border-sky-500/40 bg-slate-950/90 p-2.5 shadow-2xl backdrop-blur-md">
+    <div className="pointer-events-auto absolute left-[106px] right-3 top-3 z-10 md:left-1/2 md:right-auto md:-translate-x-1/2 md:w-[480px] rounded-xl border border-sky-500/40 bg-slate-950/90 p-2.5 shadow-2xl backdrop-blur-md">
       <div className="flex items-center justify-between gap-2">
         <div className="flex items-center gap-2 min-w-0">
           <div className="flex h-6 w-6 shrink-0 items-center justify-center rounded-lg bg-sky-500/20 text-sky-300">

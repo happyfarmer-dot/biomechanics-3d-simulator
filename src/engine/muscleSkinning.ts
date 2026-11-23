@@ -20,6 +20,7 @@ export interface SkinnedMuscleData {
   restNormals: Float32Array;
   restLength: number;
   restDiagLength: number;
+  restCenter: Vec3;
   usedJoints: JointId[];
 }
 
@@ -156,15 +157,6 @@ const UPPER_LIMB_ANATOMY_KEYWORDS = [
   'digiti_minimi',
 ];
 
-const THORAX_SHOULDER_BOUNDARY_KEYWORDS = [
-  'latissimus',
-  'pectoralis',
-  'serratus',
-  'trapezius',
-  'rhomboid',
-  'subclavius',
-];
-
 /**
  * Strips the legacy export prefix BONE__<jointId>__ or MUSCLE__<jointId>__ so only the
  * true anatomical structure name is matched against keyword lists.
@@ -230,6 +222,11 @@ export function classifyMeshZone(
     cleanName.includes('mandible') ||
     cleanName.includes('masseter') ||
     cleanName.includes('sternocleidomastoid') ||
+    cleanName.includes('splenius') ||
+    cleanName.includes('semispinalis') ||
+    cleanName.includes('capitis') ||
+    cleanName.includes('cervicis') ||
+    cleanName.includes('scalene') ||
     cleanName.includes('platysma')
   ) {
     return 'head_neck';
@@ -359,15 +356,29 @@ export function findNearestBoneJointInZone(
  * - Dual horizontal & vertical gates for thorax-shoulder boundary (latissimus/pectoralis/serratus/trapezius & vy < shoulderPos.y)
  * - Foot sole 100% ankle binding below anklePos.y + 0.05m
  */
+const AXILLA_BOUNDARY_KEYWORDS = [
+  'latissimus',
+  'pectoralis',
+  'serratus',
+  'teres_major',
+  'teres_minor',
+  'teres major',
+  'teres minor',
+  'trapezius',
+  'rhomboid',
+  'subclavius',
+];
+
 function computeVertexJointPairAndWeight(
   vx: number,
   vy: number,
-  _vz: number,
+  vz: number,
   zone: LimbZone,
   r: Record<JointId, Vec3>,
   meshNameLower: string = ''
 ): { jA: JointId; jB: JointId; wB: number } {
-  const TRANSITION_M = 0.055; // strict ±5.5cm transition band
+  const TRANSITION_M = 0.055; // strict ±5.5cm transition band for knee & elbow
+  const DISTAL_TRANSITION_M = 0.025; // strict ±2.5cm transition band for wrist & ankle
 
   if (zone === 'leg_L' || zone === 'leg_R') {
     const side = zone === 'leg_L' ? 'L' : 'R';
@@ -379,8 +390,8 @@ function computeVertexJointPairAndWeight(
     const kneeY = r[kneeId][1];
     const ankleY = r[ankleId][1];
 
-    // 0. Foot sole / plantar guard: below ankleY + 0.03m is 100% bound to ankle
-    if (vy < ankleY + 0.01) {
+    // 0. Foot sole / plantar guard: below ankleY - 0.025m is 100% bound to ankle
+    if (vy < ankleY - DISTAL_TRANSITION_M) {
       return { jA: kneeId, jB: ankleId, wB: 1.0 };
     }
 
@@ -396,8 +407,8 @@ function computeVertexJointPairAndWeight(
       return { jA: hipId, jB: kneeId, wB: wKnee };
     }
 
-    // 3. Lower leg down to Ankle + Foot virtual segment (strict ±4.5cm around ankleY; below is 100% ankle)
-    const wAnkle = smoothstep(ankleY + 0.045, ankleY - 0.025, vy);
+    // 3. Lower leg down to Ankle + Foot virtual segment (strict ±2.5cm around ankleY)
+    const wAnkle = smoothstep(ankleY + DISTAL_TRANSITION_M, ankleY - DISTAL_TRANSITION_M, vy);
     return { jA: kneeId, jB: ankleId, wB: wAnkle };
   }
 
@@ -412,21 +423,24 @@ function computeVertexJointPairAndWeight(
     const wr = r[wrId];
     const sx = Math.abs(sh[0]);
     const absX = Math.abs(vx);
-    const isBoundaryMuscle = THORAX_SHOULDER_BOUNDARY_KEYWORDS.some((kw) =>
+    const isAxillaMuscle = AXILLA_BOUNDARY_KEYWORDS.some((kw) =>
       meshNameLower.includes(kw)
     );
+    const dShoulder = Math.hypot(vx - sh[0], vy - sh[1], vz - sh[2]);
 
-    // 1. Thorax-Shoulder origin pinning with Dual Horizontal (wx) + Vertical (wy) Gate:
-    // Applies to thorax-shoulder boundary muscles (latissimus, pectoralis, serratus, trapezius, rhomboid, subclavius)
-    // OR vertices medial to the shoulder joint (absX < 0.95 * sx and above shoulderPos.y - 0.14)
-    if (isBoundaryMuscle || (absX < 0.95 * sx && vy > el[1] + TRANSITION_M)) {
-      const wxGate = smoothstep(0.82 * sx, 1.12 * sx, absX);
-      const wyGate =
-        vy < sh[1]
-          ? smoothstep(sh[1] - 0.14, sh[1] - 0.02, vy)
-          : 1.0;
-      const wArm = wxGate * wyGate;
-      return { jA: 'thorax', jB: shId, wB: wArm };
+    // 1. Strict Thorax-Shoulder origin pinning (eliminates flying-squirrel armpit wing membrane):
+    // For latissimus/pectoralis/serratus/teres OR vertices medial to the humeral head (absX < sx - 0.02)
+    if (isAxillaMuscle || (absX < sx - 0.02 && vy > el[1] + TRANSITION_M)) {
+      if (vy < sh[1] + 0.02) {
+        if (vy < sh[1] - 0.09 || (dShoulder > 0.13 && absX < sx - 0.02)) {
+          return { jA: 'thorax', jB: shId, wB: 0.0 };
+        }
+        const wxGate = smoothstep(sx - 0.02, sx + 0.035, absX);
+        const wyGate = smoothstep(sh[1] - 0.09, sh[1] - 0.02, vy);
+        return { jA: 'thorax', jB: shId, wB: wxGate * wyGate };
+      }
+      const wxGate = smoothstep(sx - 0.05, sx + 0.02, absX);
+      return { jA: 'thorax', jB: shId, wB: wxGate };
     }
 
     // 2. Upper arm down to Elbow transition (strict ±5.5cm around el.y)
@@ -435,43 +449,55 @@ function computeVertexJointPairAndWeight(
       return { jA: shId, jB: elId, wB: wElbow };
     }
 
-    // 3. Forearm down to Wrist + Hand virtual segment (below wr.y is 100% wrist)
-    const wWrist = smoothstep(wr[1] + 0.045, wr[1] - 0.02, vy);
+    // 3. Forearm down to Wrist + Hand virtual segment (strict ±2.5cm around wr.y, no ballooning)
+    const wWrist = smoothstep(wr[1] + DISTAL_TRANSITION_M, wr[1] - DISTAL_TRANSITION_M, vy);
     return { jA: elId, jB: wrId, wB: wWrist };
   }
 
   if (zone === 'head_neck') {
     const neckY = r.neck[1];
     const headY = r.head[1];
-    if (vy < headY - 0.025) {
-      const wNeck = smoothstep(neckY - 0.03, neckY + 0.03, vy);
+    const thoraxTopY = Math.min(neckY - 0.07, r.thorax[1] + 0.16);
+    if (vy <= neckY) {
+      const wNeck = smoothstep(thoraxTopY, neckY, vy);
       return { jA: 'thorax', jB: 'neck', wB: wNeck };
     }
-    const wHead = smoothstep(headY - 0.025, headY + 0.02, vy);
+    const wHead = smoothstep(neckY, headY - 0.03, vy);
     return { jA: 'neck', jB: 'head', wB: wHead };
   }
 
-  // Torso (pelvis -> lumbar -> thorax) with Dual Horizontal + Vertical Gate for chest/back muscles
+  // Torso (pelvis -> lumbar -> thorax -> neck/head if extending above thoraxTopY)
   const lumbarY = r.lumbar[1];
   const thoraxY = r.thorax[1];
+  const neckY = r.neck[1];
+  const headY = r.head[1];
   const hipY = (r.hip_L[1] + r.hip_R[1]) * 0.5;
-  const shY = (r.shoulder_L[1] + r.shoulder_R[1]) * 0.5;
-  const sx = (Math.abs(r.shoulder_L[0]) + Math.abs(r.shoulder_R[0])) * 0.5;
+  const shSide = vx >= 0 ? 'L' : 'R';
+  const sh = r[`shoulder_${shSide}` as JointId];
+  const sx = Math.abs(sh[0]);
   const absX = Math.abs(vx);
+  const dShoulder = Math.hypot(vx - sh[0], vy - sh[1], vz - sh[2]);
 
-  // Dual Horizontal + Vertical Gate for latissimus, pectoralis, serratus, trapezius, and upper torso vertices
-  if (vy > lumbarY && absX > 0.82 * sx && vy > shY - 0.14) {
-    const side = vx >= 0 ? 'L' : 'R';
-    const shId = `shoulder_${side}` as JointId;
-    const wxGate = smoothstep(0.82 * sx, 1.12 * sx, absX);
-    const wyGate =
-      vy < shY
-        ? smoothstep(shY - 0.14, shY - 0.02, vy)
-        : 1.0;
+  // Strict Axilla / Shoulder gate for wide chest/back muscles in torso zone
+  if (vy > lumbarY && vy >= sh[1] - 0.09 && (absX >= sx - 0.02 || dShoulder <= 0.13)) {
+    const shId = `shoulder_${shSide}` as JointId;
+    const wxGate = smoothstep(sx - 0.02, sx + 0.035, absX);
+    const wyGate = vy < sh[1] ? smoothstep(sh[1] - 0.09, sh[1] - 0.02, vy) : 1.0;
     const wArm = wxGate * wyGate;
     if (wArm > 1e-4) {
       return { jA: 'thorax', jB: shId, wB: wArm };
     }
+  }
+
+  // Continuous neck transition for upper trapezius / splenius extending above thoraxTopY
+  const thoraxTopY = Math.min(neckY - 0.07, thoraxY + 0.16);
+  if (vy > thoraxTopY && absX < sx - 0.04) {
+    if (vy <= neckY) {
+      const wNeck = smoothstep(thoraxTopY, neckY, vy);
+      return { jA: 'thorax', jB: 'neck', wB: wNeck };
+    }
+    const wHead = smoothstep(neckY, headY - 0.03, vy);
+    return { jA: 'neck', jB: 'head', wB: wHead };
   }
 
   // If a torso/gluteal muscle extends below lumbar into the hip region
@@ -577,6 +603,11 @@ export function prepareAutoSkinnedMuscle(
     Math.hypot(maxX - minX, maxYBox - minYBox, maxZ - minZ),
     0.02
   );
+  const restCenter: Vec3 = [
+    (minX + maxX) * 0.5,
+    (minYBox + maxYBox) * 0.5,
+    (minZ + maxZ) * 0.5,
+  ];
 
   return {
     name: mesh.name,
@@ -592,6 +623,7 @@ export function prepareAutoSkinnedMuscle(
     restNormals,
     restLength,
     restDiagLength,
+    restCenter,
     usedJoints,
   };
 }
