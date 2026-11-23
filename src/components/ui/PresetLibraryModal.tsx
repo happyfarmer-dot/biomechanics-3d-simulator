@@ -1,5 +1,6 @@
 import { Search, X } from 'lucide-react';
 import { useMemo, useState } from 'react';
+import { createPortal } from 'react-dom';
 import { PRESET_POSES } from '../../data/presetPoses';
 import { useSimStore } from '../../store/useSimStore';
 import type { PresetCategory } from '../../types/biomechanics';
@@ -39,19 +40,37 @@ export function PresetLibraryModal({
 
   if (!open) return null;
 
-  return (
+  return createPortal(
     <div
       data-testid="preset-library-modal"
-      className="fixed inset-0 z-50 flex items-center justify-center bg-slate-950/75 p-3 backdrop-blur-md"
+      style={{
+        position: 'fixed',
+        inset: 0,
+        zIndex: 9999,
+        display: 'flex',
+        alignItems: 'center',
+        justifyContent: 'center',
+        padding: '12px',
+        background: 'rgba(0, 0, 0, 0.72)',
+      }}
+      className="backdrop-blur-md"
       onClick={onClose}
     >
       <div
-        className="flex max-h-[85vh] w-full max-w-2xl flex-col overflow-hidden rounded-2xl border border-slate-700/80 bg-slate-900/95 shadow-2xl"
+        style={{
+          width: '100%',
+          maxWidth: '440px',
+          maxHeight: '82dvh',
+          display: 'flex',
+          flexDirection: 'column',
+          overflow: 'hidden',
+        }}
+        className="rounded-2xl border border-slate-700/80 bg-slate-900/95 shadow-2xl"
         onClick={(e) => e.stopPropagation()}
       >
-        <div className="flex items-center justify-between border-b border-slate-800 px-4 py-3">
+        <div className="flex shrink-0 items-center justify-between border-b border-slate-800 px-4 py-3">
           <div>
-            <h2 className="text-sm font-bold text-slate-100">姿勢與運動動作庫（{PRESET_POSES.length} 種）</h2>
+            <h2 className="text-sm font-bold text-slate-100">運動姿勢庫（{PRESET_POSES.length} 種）</h2>
             <p className="text-[11px] text-slate-400">選擇動作即時套用全身關節角度與生物力學負荷</p>
           </div>
           <button
@@ -150,6 +169,7 @@ export function PresetLibraryModal({
           )}
         </div>
       </div>
-    </div>
+    </div>,
+    document.body
   );
 }

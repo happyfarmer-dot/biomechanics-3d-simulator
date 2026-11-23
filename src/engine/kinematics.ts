@@ -54,7 +54,7 @@ export function anatomicalToEuler(jointId: JointId, angles: AnatomicalAngles): L
   // Upper limb (shoulder, elbow, wrist) and Hip: positive flexion = forward (-X)
   return {
     x: -flexion * DEG2RAD,
-    y: -sign * rotation * DEG2RAD,
+    y: sign * rotation * DEG2RAD,
     z: sign * abduction * DEG2RAD,
     order,
   };
@@ -86,7 +86,7 @@ export function eulerToAnatomical(jointId: JointId, euler: { x: number; y: numbe
   return {
     flexion: -euler.x * RAD2DEG,
     abduction: sign * euler.z * RAD2DEG,
-    rotation: -sign * euler.y * RAD2DEG,
+    rotation: sign * euler.y * RAD2DEG,
   };
 }
 
@@ -169,6 +169,24 @@ export function computeKinematics(
       distalWorldPosition: [distalWorld.x, distalWorld.y, distalWorld.z] as Vec3,
       comWorldPosition: [comWorld.x, comWorld.y, comWorld.z] as Vec3,
     };
+  }
+
+  // Auto Grounding for upright poses (standing, squat, deadlift, lunge): keep feet on y = 0
+  const isProneOrSupine =
+    Math.abs(pose.pelvis.flexion) >= 60 || Math.abs(pose.pelvis.abduction) >= 60;
+  if (!isProneOrSupine) {
+    const footSoleOffset = 0.075 * scale;
+    const minFootY = Math.min(
+      joints.ankle_L.worldPosition[1] - footSoleOffset,
+      joints.ankle_R.worldPosition[1] - footSoleOffset
+    );
+    if (Math.abs(minFootY) > 1e-4) {
+      for (const id of JOINT_ORDER) {
+        joints[id].worldPosition[1] -= minFootY;
+        joints[id].distalWorldPosition[1] -= minFootY;
+        joints[id].comWorldPosition[1] -= minFootY;
+      }
+    }
   }
 
   return { joints };

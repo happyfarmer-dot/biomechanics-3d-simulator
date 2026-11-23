@@ -32,8 +32,8 @@ describe('Kinematics & Mirror Symmetry', () => {
     const pose = createNeutralPose();
     pose.elbow_L.flexion = 90;
     pose.elbow_R.flexion = 90;
-    pose.shoulder_L.rotation = 45;
-    pose.shoulder_R.rotation = 45;
+    pose.shoulder_L.rotation = -45;
+    pose.shoulder_R.rotation = -45;
 
     const kin = computeKinematics(pose, DEFAULT_HEIGHT_M);
     const eL = kin.joints.elbow_L.worldPosition;

@@ -23,10 +23,10 @@ export function ActionScrubber() {
       const dt = Math.min(0.05, (now - last) / 1000);
       last = now;
       setProgress((prev) => {
-        const next = prev + dt * 0.45;
+        const next = prev + dt * 0.4;
         const wrapped = next > 1 ? 0 : next;
         const pose = interpolatePoseSlerp(trajectory.keyframes, wrapped);
-        useSimStore.setState((s) => ({ ...s, pose }));
+        useSimStore.getState().setPose(pose);
         return wrapped;
       });
       rafId = requestAnimationFrame(tick);
@@ -76,7 +76,7 @@ export function ActionScrubber() {
             const t = Number(e.target.value) / 100;
             setProgress(t);
             const pose = interpolatePoseSlerp(trajectory.keyframes, t);
-            useSimStore.setState((s) => ({ ...s, pose }));
+            useSimStore.getState().setPose(pose);
           }}
           className="h-1.5 w-full accent-sky-400 cursor-pointer"
         />
