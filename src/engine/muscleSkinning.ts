@@ -425,6 +425,21 @@ function computeVertexJointPairAndWeight(
     const wr = r[wrId];
     const sx = Math.abs(sh[0]);
     const absX = Math.abs(vx);
+    const isDeltoid = meshNameLower.includes('deltoid');
+
+    // Dedicated Deltoid (acromion/clavicle/scapular spine -> deltoid tuberosity):
+    // Keep only medial-most superior origin (absX < sx - 0.015 && vy >= sh[1]) on thorax;
+    // all lateral/inferior belly & insertion vertices smoothly transition to w_arm = 1.0.
+    if (isDeltoid) {
+      if (vy < sh[1] || absX >= sx) {
+        return { jA: 'thorax', jB: shId, wB: 1.0 };
+      }
+      const wx = smoothstep(sx - 0.05, sx - 0.015, absX);
+      const wy = smoothstep(sh[1] + 0.04, sh[1], vy);
+      const wArm = 1.0 - (1.0 - wx) * (1.0 - wy);
+      return { jA: 'thorax', jB: shId, wB: wArm };
+    }
+
     const isAxillaMuscle = AXILLA_BOUNDARY_KEYWORDS.some((kw) =>
       meshNameLower.includes(kw)
     );
