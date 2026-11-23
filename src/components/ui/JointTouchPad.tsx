@@ -43,6 +43,8 @@ export function JointTouchPad() {
   const joyOffsetRef = useRef<{ nx: number; ny: number }>({ nx: 0, ny: 0 });
   const padRectRef = useRef<DOMRect | null>(null);
 
+  const lastLatSignRef = useRef<number>(1);
+
   useEffect(() => {
     let rafId = 0;
     let lastTime = performance.now();
@@ -63,46 +65,94 @@ export function JointTouchPad() {
           ? new Quaternion(...state.kinematics.joints[parentId].worldQuaternion)
           : new Quaternion();
 
-        // Limb distal vector in world space (uses child joint or virtual terminal segment)
-        const childId = PRIMARY_CHILD_MAP[jId];
-        const childPos = childId
-          ? state.kinematics.joints[childId].worldPosition
-          : jState.distalWorldPosition;
+        const camRight = new Vector3(...state.cameraVectors.right).normalize();
+        const camUp = new Vector3(...state.cameraVectors.up).normalize();
 
-        const limbDir = new Vector3(
-          childPos[0] - jState.worldPosition[0],
-          childPos[1] - jState.worldPosition[1],
-          childPos[2] - jState.worldPosition[2]
-        );
+        // Axial spine joints (neck, lumbar, pelvis): singularity-free direct extension/flexion + screen-aligned lateral bending
+        if (jId === 'neck' || jId === 'lumbar' || jId === 'pelvis') {
+          const speedDeg = Math.min(1, mag) * 95;
+          const curAngles = state.pose[jId];
 
-        if (limbDir.lengthSq() > 1e-6) {
-          limbDir.normalize();
-          const camRight = new Vector3(...state.cameraVectors.right);
-          const camUp = new Vector3(...state.cameraVectors.up);
-          const desiredDir = camRight
-            .multiplyScalar(nx)
-            .add(camUp.multiplyScalar(ny))
-            .normalize();
+          // ny > 0 (push UP) -> extension (negative flexion); ny < 0 (push DOWN) -> flexion (positive)
+          const nextFlexion = curAngles.flexion - ny * speedDeg * dt;
 
-          const worldAxis = new Vector3().crossVectors(limbDir, desiredDir);
-          if (worldAxis.lengthSq() > 1e-6) {
-            worldAxis.normalize();
-            const localAxis = worldAxis.applyQuaternion(parentQuat.clone().invert()).normalize();
+          // Screen-aligned lateral bending sign via dot(cross(abductionWorldAxis, limbDir), camRight)
+          const childId = PRIMARY_CHILD_MAP[jId];
+          const childPos = childId
+            ? state.kinematics.joints[childId].worldPosition
+            : jState.distalWorldPosition;
+          const limbDir = new Vector3(
+            childPos[0] - jState.worldPosition[0],
+            childPos[1] - jState.worldPosition[1],
+            childPos[2] - jState.worldPosition[2]
+          );
+          if (limbDir.lengthSq() > 1e-6) {
+            limbDir.normalize();
+          } else {
+            limbDir.set(0, 1, 0);
+          }
 
-            // Speed proportional to joystick displacement (~95 deg/sec at full deflection)
-            const angleRad = Math.min(1, mag) * (Math.PI * 0.53) * dt;
-            const deltaQ = new Quaternion().setFromAxisAngle(localAxis, angleRad);
+          const abductionWorldAxis = new Vector3(0, 0, -1).applyQuaternion(parentQuat).normalize();
+          const latTangent = new Vector3().crossVectors(abductionWorldAxis, limbDir);
+          if (latTangent.lengthSq() > 1e-6) {
+            latTangent.normalize();
+            const proj = latTangent.dot(camRight);
+            if (Math.abs(proj) > 0.15) {
+              lastLatSignRef.current = Math.sign(proj);
+            }
+          }
 
-            const curAngles = state.pose[jId];
-            const currentQ = localEulerToQuaternion(anatomicalToEuler(jId, curAngles));
-            const nextQ = deltaQ.multiply(currentQ);
-            const nextEuler = new Euler().setFromQuaternion(nextQ, 'ZXY');
-            const nextAnat = eulerToAnatomical(jId, nextEuler);
+          const nextAbduction = curAngles.abduction + nx * lastLatSignRef.current * speedDeg * dt;
 
-            state.setJointAngles(jId, {
-              flexion: Math.round(nextAnat.flexion * 10) / 10,
-              abduction: Math.round(nextAnat.abduction * 10) / 10,
-            });
+          state.setJointAngles(jId, {
+            flexion: Math.round(nextFlexion * 10) / 10,
+            abduction: Math.round(nextAbduction * 10) / 10,
+          });
+        } else {
+          // Limb distal vector in world space (uses child joint or virtual terminal segment)
+          const childId = PRIMARY_CHILD_MAP[jId];
+          const childPos = childId
+            ? state.kinematics.joints[childId].worldPosition
+            : jState.distalWorldPosition;
+
+          const limbDir = new Vector3(
+            childPos[0] - jState.worldPosition[0],
+            childPos[1] - jState.worldPosition[1],
+            childPos[2] - jState.worldPosition[2]
+          );
+
+          if (limbDir.lengthSq() > 1e-6) {
+            limbDir.normalize();
+            const desiredDir = camRight
+              .clone()
+              .multiplyScalar(nx)
+              .add(camUp.clone().multiplyScalar(ny))
+              .normalize();
+
+            const worldAxis = new Vector3().crossVectors(limbDir, desiredDir);
+            // Collinear singularity guard: if limbDir || desiredDir, smoothly pivot around camRight
+            if (worldAxis.length() < 0.05) {
+              worldAxis.copy(camRight).multiplyScalar(ny >= 0 ? -1 : 1);
+            }
+            if (worldAxis.lengthSq() > 1e-6) {
+              worldAxis.normalize();
+              const localAxis = worldAxis.applyQuaternion(parentQuat.clone().invert()).normalize();
+
+              // Speed proportional to joystick displacement (~95 deg/sec at full deflection)
+              const angleRad = Math.min(1, mag) * (Math.PI * 0.53) * dt;
+              const deltaQ = new Quaternion().setFromAxisAngle(localAxis, angleRad);
+
+              const curAngles = state.pose[jId];
+              const currentQ = localEulerToQuaternion(anatomicalToEuler(jId, curAngles));
+              const nextQ = deltaQ.multiply(currentQ);
+              const nextEuler = new Euler().setFromQuaternion(nextQ, 'ZXY');
+              const nextAnat = eulerToAnatomical(jId, nextEuler);
+
+              state.setJointAngles(jId, {
+                flexion: Math.round(nextAnat.flexion * 10) / 10,
+                abduction: Math.round(nextAnat.abduction * 10) / 10,
+              });
+            }
           }
         }
       }

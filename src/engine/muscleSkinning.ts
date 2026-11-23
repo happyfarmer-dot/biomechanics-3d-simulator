@@ -367,6 +367,7 @@ const AXILLA_BOUNDARY_KEYWORDS = [
   'trapezius',
   'rhomboid',
   'subclavius',
+  'subscapularis',
 ];
 
 function computeVertexJointPairAndWeight(
@@ -375,7 +376,8 @@ function computeVertexJointPairAndWeight(
   vz: number,
   zone: LimbZone,
   r: Record<JointId, Vec3>,
-  meshNameLower: string = ''
+  meshNameLower: string = '',
+  isMedialOriginMesh: boolean = false
 ): { jA: JointId; jB: JointId; wB: number } {
   const TRANSITION_M = 0.055; // strict ±5.5cm transition band for knee & elbow
   const DISTAL_TRANSITION_M = 0.025; // strict ±2.5cm transition band for wrist & ankle
@@ -426,21 +428,23 @@ function computeVertexJointPairAndWeight(
     const isAxillaMuscle = AXILLA_BOUNDARY_KEYWORDS.some((kw) =>
       meshNameLower.includes(kw)
     );
-    const dShoulder = Math.hypot(vx - sh[0], vy - sh[1], vz - sh[2]);
 
     // 1. Strict Thorax-Shoulder origin pinning (eliminates flying-squirrel armpit wing membrane):
-    // For latissimus/pectoralis/serratus/teres OR vertices medial to the humeral head (absX < sx - 0.02)
-    if (isAxillaMuscle || (absX < sx - 0.02 && vy > el[1] + TRANSITION_M)) {
-      if (vy < sh[1] + 0.02) {
-        if (vy < sh[1] - 0.09 || (dShoulder > 0.13 && absX < sx - 0.02)) {
-          return { jA: 'thorax', jB: shId, wB: 0.0 };
-        }
-        const wxGate = smoothstep(sx - 0.02, sx + 0.035, absX);
-        const wyGate = smoothstep(sh[1] - 0.09, sh[1] - 0.02, vy);
-        return { jA: 'thorax', jB: shId, wB: wxGate * wyGate };
+    // For latissimus/pectoralis/serratus/teres/subscapularis/rhomboid/trapezius OR medial-origin arm meshes OR vertices medial to humeral head
+    if (isAxillaMuscle || isMedialOriginMesh || (absX < sx - 0.02 && vy > el[1] + TRANSITION_M)) {
+      if (vy < sh[1] - 0.055) {
+        return { jA: 'thorax', jB: shId, wB: 0.0 };
       }
-      const wxGate = smoothstep(sx - 0.05, sx + 0.02, absX);
-      return { jA: 'thorax', jB: shId, wB: wxGate };
+      const dInsertion = Math.hypot(
+        vx - sh[0] * 1.08,
+        vy - (sh[1] - 0.02),
+        vz - sh[2]
+      );
+      if (absX < sx - 0.03 || dInsertion > 0.095) {
+        return { jA: 'thorax', jB: shId, wB: 0.0 };
+      }
+      const wArm = Math.pow(smoothstep(0.095, 0.03, dInsertion), 2.0) * 0.85;
+      return { jA: 'thorax', jB: shId, wB: wArm };
     }
 
     // 2. Upper arm down to Elbow transition (strict ±5.5cm around el.y)
@@ -476,16 +480,20 @@ function computeVertexJointPairAndWeight(
   const sh = r[`shoulder_${shSide}` as JointId];
   const sx = Math.abs(sh[0]);
   const absX = Math.abs(vx);
-  const dShoulder = Math.hypot(vx - sh[0], vy - sh[1], vz - sh[2]);
 
   // Strict Axilla / Shoulder gate for wide chest/back muscles in torso zone
-  if (vy > lumbarY && vy >= sh[1] - 0.09 && (absX >= sx - 0.02 || dShoulder <= 0.13)) {
-    const shId = `shoulder_${shSide}` as JointId;
-    const wxGate = smoothstep(sx - 0.02, sx + 0.035, absX);
-    const wyGate = vy < sh[1] ? smoothstep(sh[1] - 0.09, sh[1] - 0.02, vy) : 1.0;
-    const wArm = wxGate * wyGate;
-    if (wArm > 1e-4) {
-      return { jA: 'thorax', jB: shId, wB: wArm };
+  if (vy > lumbarY && vy >= sh[1] - 0.055 && absX >= sx - 0.03) {
+    const dInsertion = Math.hypot(
+      vx - sh[0] * 1.08,
+      vy - (sh[1] - 0.02),
+      vz - sh[2]
+    );
+    if (dInsertion <= 0.095) {
+      const shId = `shoulder_${shSide}` as JointId;
+      const wArm = Math.pow(smoothstep(0.095, 0.03, dInsertion), 2.0) * 0.85;
+      if (wArm > 1e-4) {
+        return { jA: 'thorax', jB: shId, wB: wArm };
+      }
     }
   }
 
@@ -547,6 +555,7 @@ export function prepareAutoSkinnedMuscle(
   const meshNameLower = mesh.name.toLowerCase();
   let minX = Infinity, minYBox = Infinity, minZ = Infinity;
   let maxX = -Infinity, maxYBox = -Infinity, maxZ = -Infinity;
+  let minAbsX = Infinity;
 
   for (let i = 0; i < count; i++) {
     v.fromBufferAttribute(posAttr, i).applyMatrix4(mesh.matrixWorld);
@@ -560,19 +569,40 @@ export function prepareAutoSkinnedMuscle(
     if (wx > maxX) maxX = wx;
     if (wy > maxYBox) maxYBox = wy;
     if (wz > maxZ) maxZ = wz;
+    const ax = Math.abs(wx);
+    if (ax < minAbsX) minAbsX = ax;
 
-    const { jA, jB, wB } = computeVertexJointPairAndWeight(wx, wy, wz, zone, r, meshNameLower);
+    const i3 = i * 3;
+    restPositions[i3] = wx;
+    restPositions[i3 + 1] = wy;
+    restPositions[i3 + 2] = wz;
+  }
+
+  const isMedialOriginMesh =
+    (zone === 'arm_L' || zone === 'arm_R') &&
+    minAbsX < Math.abs(r.shoulder_L[0]) * 0.55;
+
+  for (let i = 0; i < count; i++) {
+    const i3 = i * 3;
+    const wx = restPositions[i3];
+    const wy = restPositions[i3 + 1];
+    const wz = restPositions[i3 + 2];
+
+    const { jA, jB, wB } = computeVertexJointPairAndWeight(
+      wx,
+      wy,
+      wz,
+      zone,
+      r,
+      meshNameLower,
+      isMedialOriginMesh
+    );
 
     jointAIndices[i] = JOINT_TO_INDEX[jA];
     jointBIndices[i] = JOINT_TO_INDEX[jB];
     weightsB[i] = wB;
     usedSet.add(jA);
     usedSet.add(jB);
-
-    const i3 = i * 3;
-    restPositions[i3] = wx;
-    restPositions[i3 + 1] = wy;
-    restPositions[i3 + 2] = wz;
 
     if (normAttr) {
       restNormals[i3] = normAttr.getX(i);
