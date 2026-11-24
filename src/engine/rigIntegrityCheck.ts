@@ -2,9 +2,12 @@ import { Quaternion, Vector3 } from 'three';
 import { createNeutralPose, DEFAULT_HEIGHT_M } from '../data/skeletonConfig';
 import type { PoseMap } from '../types/biomechanics';
 import type { CalibrationResult } from './calibrateSkeleton';
-import { computeKinematics } from './kinematics';
+import { computeClavicleWorldState, computeKinematics } from './kinematics';
 import {
   ALL_JOINTS,
+  CLAVICLE_L_INDEX,
+  CLAVICLE_R_INDEX,
+  restoreRestMuscleVertices,
   updateSkinnedMuscleVertices,
   type SkinnedMuscleData,
 } from './muscleSkinning';
@@ -131,7 +134,7 @@ export function runRigIntegrityCheck(
     const kin = computeKinematics(ep.pose, DEFAULT_HEIGHT_M, calibration.offsets);
 
     for (const m of muscles) {
-      updateSkinnedMuscleVertices(m, kin, DEFAULT_HEIGHT_M, restJoints);
+      updateSkinnedMuscleVertices(m, kin, DEFAULT_HEIGHT_M, restJoints, ep.pose);
       const posAttr = m.geometry.getAttribute('position');
 
       let minX = Infinity, minY = Infinity, minZ = Infinity;
@@ -155,13 +158,30 @@ export function runRigIntegrityCheck(
         // Check pure anchor vertices (w === 1.0 or w === 0.0) for rigid attachment drift
         if (wB <= 1e-4 || wB >= 0.9999) {
           const jIdx = wB <= 1e-4 ? m.jointAIndices[i] : m.jointBIndices[i];
-          const jId = ALL_JOINTS[jIdx];
-          const jState = kin.joints[jId];
-          const rJ = restJoints[jId];
           const i3 = i * 3;
+          let rJ: [number, number, number];
 
-          pJoint.set(...jState.worldPosition);
-          qJoint.set(...jState.worldQuaternion);
+          if (jIdx === CLAVICLE_L_INDEX || jIdx === CLAVICLE_R_INDEX) {
+            const side = jIdx === CLAVICLE_L_INDEX ? 'L' : 'R';
+            const clav = computeClavicleWorldState(
+              side,
+              ep.pose,
+              kin.joints.thorax,
+              restJoints[`shoulder_${side}`],
+              restJoints.thorax,
+              1
+            );
+            pJoint.set(...clav.worldPosition);
+            qJoint.set(...clav.worldQuaternion);
+            rJ = clav.restPosition;
+          } else {
+            const jId = ALL_JOINTS[jIdx];
+            const jState = kin.joints[jId];
+            rJ = restJoints[jId];
+            pJoint.set(...jState.worldPosition);
+            qJoint.set(...jState.worldQuaternion);
+          }
+
           vExpected
             .set(
               m.restPositions[i3] - rJ[0],
@@ -444,9 +464,9 @@ export function runRigIntegrityCheck(
   );
   const maxAnkleHeightDiffM = Math.max(ankleLDiffY, ankleRDiffY);
 
-  // Restore neutral pose vertices after testing
+  // Restore exact rest-pose vertices & normals after testing so GPU DQS transforms from rest pose
   for (const m of muscles) {
-    updateSkinnedMuscleVertices(m, neutralKin, DEFAULT_HEIGHT_M, restJoints);
+    restoreRestMuscleVertices(m);
   }
 
   const check3Pass = minCoveragePct >= 99.0;

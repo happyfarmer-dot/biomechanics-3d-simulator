@@ -1,5 +1,5 @@
 import { Pause, Play } from 'lucide-react';
-import { useEffect, useState } from 'react';
+import { useEffect, useRef, useState } from 'react';
 import { ACTION_TRAJECTORIES, interpolatePoseSlerp } from '../../data/actionTrajectories';
 import { useSimStore } from '../../store/useSimStore';
 
@@ -9,8 +9,12 @@ export function ActionScrubber() {
 
   const [progress, setProgress] = useState(1);
   const [playing, setPlaying] = useState(false);
+  const progressRef = useRef(1);
+  const dirRef = useRef(-1);
 
   useEffect(() => {
+    progressRef.current = 1;
+    dirRef.current = -1;
     setProgress(1);
     setPlaying(false);
   }, [activePresetId]);
@@ -22,13 +26,18 @@ export function ActionScrubber() {
     const tick = (now: number) => {
       const dt = Math.min(0.05, (now - last) / 1000);
       last = now;
-      setProgress((prev) => {
-        const next = prev + dt * 0.4;
-        const wrapped = next > 1 ? 0 : next;
-        const pose = interpolatePoseSlerp(trajectory.keyframes, wrapped);
-        useSimStore.getState().setPose(pose);
-        return wrapped;
-      });
+      let next = progressRef.current + dirRef.current * dt * 0.45;
+      if (next >= 1) {
+        next = 1;
+        dirRef.current = -1;
+      } else if (next <= 0) {
+        next = 0;
+        dirRef.current = 1;
+      }
+      progressRef.current = next;
+      setProgress(next);
+      const pose = interpolatePoseSlerp(trajectory.keyframes, next);
+      useSimStore.getState().setPose(pose, true);
       rafId = requestAnimationFrame(tick);
     };
     rafId = requestAnimationFrame(tick);
@@ -45,7 +54,7 @@ export function ActionScrubber() {
   return (
     <div
       data-testid="action-scrubber"
-      className="pointer-events-auto absolute bottom-14 left-1/2 z-20 flex w-[92%] max-w-md -translate-x-1/2 items-center gap-2.5 rounded-xl border border-slate-700/80 bg-slate-950/90 px-3 py-2 shadow-2xl backdrop-blur-md"
+      className="pointer-events-auto absolute bottom-14 md:bottom-4 left-1/2 z-20 flex w-[92%] max-w-md -translate-x-1/2 items-center gap-2.5 rounded-xl border border-slate-700/80 bg-slate-950/90 px-3 py-2 shadow-2xl backdrop-blur-md"
     >
       <button
         type="button"
@@ -74,9 +83,11 @@ export function ActionScrubber() {
           onChange={(e) => {
             setPlaying(false);
             const t = Number(e.target.value) / 100;
+            progressRef.current = t;
+            dirRef.current = t >= 1 ? -1 : 1;
             setProgress(t);
             const pose = interpolatePoseSlerp(trajectory.keyframes, t);
-            useSimStore.getState().setPose(pose);
+            useSimStore.getState().setPose(pose, true);
           }}
           className="h-1.5 w-full accent-sky-400 cursor-pointer"
         />

@@ -83,11 +83,13 @@ export function computeStatics(
     includeGravity?: boolean;
     bodyMassKg?: number;
     heightM?: number;
+    dynamicLoadFactor?: number;
   } = {}
 ): Record<JointId, JointLoadResult> {
   const includeGravity = options.includeGravity ?? true;
   const bodyMassKg = options.bodyMassKg ?? DEFAULT_MASS_KG;
   const heightM = options.heightM ?? DEFAULT_HEIGHT_M;
+  const dynamicLoadFactor = Math.max(1.0, options.dynamicLoadFactor ?? 1.0);
 
   const childrenMap: Record<JointId, JointId[]> = {} as Record<JointId, JointId[]>;
   for (const id of JOINT_ORDER) {
@@ -110,7 +112,11 @@ export function computeStatics(
     segmentForces[sf.targetJoint].push({
       segmentId: sf.targetJoint,
       position: getForceApplicationPoint(sf, kinematics, heightM),
-      force: sf.forceVectorWorld,
+      force: [
+        sf.forceVectorWorld[0] * dynamicLoadFactor,
+        sf.forceVectorWorld[1] * dynamicLoadFactor,
+        sf.forceVectorWorld[2] * dynamicLoadFactor,
+      ],
     });
   }
 
@@ -118,7 +124,7 @@ export function computeStatics(
     for (const id of JOINT_ORDER) {
       const massRatio = SKELETON_CONFIG[id].massRatio;
       if (massRatio <= 0) continue;
-      const weightN = bodyMassKg * massRatio * GRAVITY_MPS2;
+      const weightN = bodyMassKg * massRatio * GRAVITY_MPS2 * dynamicLoadFactor;
       segmentForces[id].push({
         segmentId: id,
         position: kinematics.joints[id].comWorldPosition,

@@ -116,6 +116,8 @@ export const COMPOSITE_POSTURE_RULES: CompositeRuleDef[] = [
     recommendation: '收緊腹橫肌與臀肌維持骨盆中立傾角（-10° 至 +15° 內），避免骨盆過度前傾或後傾鎖死。',
     check: (pose) => {
       const p = pose.pelvis;
+      // Prone/supine/side-lying orientations are whole-body posture changes, not standing pelvic tilt
+      if (Math.abs(p.flexion) >= 60 || Math.abs(p.abduction) >= 60) return [];
       if (p.flexion > 22 || p.flexion < -20 || Math.abs(p.abduction) > 20) {
         return ['lumbar', 'hip_L', 'hip_R'];
       }

@@ -1,7 +1,8 @@
 import { Box3, BufferGeometry, Float32BufferAttribute, Mesh, Quaternion, Vector3 } from 'three';
-import { DEFAULT_HEIGHT_M } from '../data/skeletonConfig';
-import type { JointId, KinematicsResult, Vec3 } from '../types/biomechanics';
+import { createNeutralPose, DEFAULT_HEIGHT_M } from '../data/skeletonConfig';
+import type { JointId, KinematicsResult, PoseMap, Vec3 } from '../types/biomechanics';
 import type { CalibrationResult } from './calibrateSkeleton';
+import { computeClavicleWorldState } from './kinematics';
 
 export type LimbZone = 'arm_L' | 'arm_R' | 'leg_L' | 'leg_R' | 'head_neck' | 'torso';
 
@@ -39,6 +40,10 @@ export const ALL_JOINTS: JointId[] = [
 export const JOINT_TO_INDEX: Record<JointId, number> = Object.fromEntries(
   ALL_JOINTS.map((id, idx) => [id, idx])
 ) as Record<JointId, number>;
+
+export const CLAVICLE_L_INDEX = 17;
+export const CLAVICLE_R_INDEX = 18;
+export const TOTAL_SKIN_BONES = 19;
 
 function smoothstep(edge0: number, edge1: number, x: number): number {
   if (Math.abs(edge1 - edge0) < 1e-6) return x >= edge1 ? 1 : 0;
@@ -360,19 +365,135 @@ export function findNearestBoneJointInZone(
  * - Dual horizontal & vertical gates for thorax-shoulder boundary (latissimus/pectoralis/serratus/trapezius & vy < shoulderPos.y)
  * - Foot sole 100% ankle binding below anklePos.y + 0.05m
  */
+const ROTATOR_CUFF_KEYWORDS = [
+  'supraspinatus',
+  'infraspinatus',
+  'subscapularis',
+  'teres_minor',
+  'teres minor',
+];
+
 const AXILLA_BOUNDARY_KEYWORDS = [
   'latissimus',
   'pectoralis',
   'serratus',
   'teres_major',
-  'teres_minor',
   'teres major',
-  'teres minor',
   'trapezius',
   'rhomboid',
   'subclavius',
-  'subscapularis',
 ];
+
+interface VertexBonePair {
+  jAIdx: number;
+  jBIdx: number;
+  jALogical: JointId;
+  jBLogical: JointId;
+  wB: number;
+}
+
+function makePair(jA: JointId, jB: JointId, wB: number): VertexBonePair {
+  return {
+    jAIdx: JOINT_TO_INDEX[jA],
+    jBIdx: JOINT_TO_INDEX[jB],
+    jALogical: jA,
+    jBLogical: jB,
+    wB,
+  };
+}
+
+/**
+ * Unified 3D continuous spatial weight field for the shoulder-axilla region
+ * (thorax / scapula [clavicle_L|R] / shoulder_L|R).
+ * Shared across both arm and torso zones so chest, back, deltoid, and rotator cuff
+ * muscles deform seamlessly without hard plane cutoffs.
+ */
+function computeShoulderAxillaWeightField(
+  vx: number,
+  vy: number,
+  vz: number,
+  side: 'L' | 'R',
+  r: Record<JointId, Vec3>,
+  meshNameLower: string
+): VertexBonePair {
+  const shId = `shoulder_${side}` as JointId;
+  const elId = `elbow_${side}` as JointId;
+  const clavIdx = side === 'L' ? CLAVICLE_L_INDEX : CLAVICLE_R_INDEX;
+  const sh = r[shId];
+  const el = r[elId];
+  const sx = Math.abs(sh[0]);
+  const absX = Math.abs(vx);
+
+  // 1. Deltoid: C1 continuous 3D projection from acromion/clavicle (scapula node) to deltoid tuberosity (humerus)
+  if (meshNameLower.includes('deltoid')) {
+    const acromionX = sh[0] * 0.85;
+    const acromionY = sh[1] + 0.045;
+    const acromionZ = sh[2];
+    const tuberosityX = sh[0] * 1.12;
+    const tuberosityY = sh[1] - 0.11;
+    const tuberosityZ = sh[2];
+    const dx = tuberosityX - acromionX;
+    const dy = tuberosityY - acromionY;
+    const dz = tuberosityZ - acromionZ;
+    const lenSq = dx * dx + dy * dy + dz * dz;
+    const t =
+      lenSq > 1e-6
+        ? clamp(((vx - acromionX) * dx + (vy - acromionY) * dy + (vz - acromionZ) * dz) / lenSq, 0, 1)
+        : 1;
+    return {
+      jAIdx: clavIdx,
+      jBIdx: JOINT_TO_INDEX[shId],
+      jALogical: 'thorax',
+      jBLogical: shId,
+      wB: smoothstep(0.05, 0.85, t),
+    };
+  }
+
+  // 2. Rotator cuff (supraspinatus, infraspinatus, subscapularis, teres minor):
+  // Driven between scapula (clavicle_L/R) and humerus (shoulder_L/R) along medial-to-humeral-head axis
+  if (ROTATOR_CUFF_KEYWORDS.some((kw) => meshNameLower.includes(kw))) {
+    const scapX = sh[0] * 0.45;
+    const scapY = sh[1] - 0.01;
+    const scapZ = sh[2] - 0.03;
+    const dx = sh[0] - scapX;
+    const dy = sh[1] - scapY;
+    const dz = sh[2] - scapZ;
+    const lenSq = dx * dx + dy * dy + dz * dz;
+    const t =
+      lenSq > 1e-6
+        ? clamp(((vx - scapX) * dx + (vy - scapY) * dy + (vz - scapZ) * dz) / lenSq, 0, 1)
+        : 0;
+    return {
+      jAIdx: clavIdx,
+      jBIdx: JOINT_TO_INDEX[shId],
+      jALogical: 'thorax',
+      jBLogical: shId,
+      wB: smoothstep(0.25, 0.92, t),
+    };
+  }
+
+  // 3. Unified 3D continuous Gaussian humerus-axis field for thoracohumeral / axilla muscles
+  const hx = (sh[0] + el[0]) * 0.5;
+  const hy = (sh[1] + el[1]) * 0.5;
+  const hz = (sh[2] + el[2]) * 0.5;
+  const abx = hx - sh[0];
+  const aby = hy - sh[1];
+  const abz = hz - sh[2];
+  const abLenSq = abx * abx + aby * aby + abz * abz;
+  const tSeg =
+    abLenSq > 1e-8
+      ? clamp(((vx - sh[0]) * abx + (vy - sh[1]) * aby + (vz - sh[2]) * abz) / abLenSq, 0, 1)
+      : 0;
+  const cx = sh[0] + abx * tSeg;
+  const cy = sh[1] + aby * tSeg;
+  const cz = sh[2] + abz * tSeg;
+  const dHumerus = Math.hypot(vx - cx, vy - cy, vz - cz);
+  const wArm =
+    Math.exp(-Math.pow(dHumerus / 0.065, 2)) *
+    smoothstep(sh[1] - 0.16, sh[1] - 0.02, vy) *
+    smoothstep(sx * 0.42, sx * 0.88, absX);
+  return makePair('thorax', shId, wArm);
+}
 
 function computeVertexJointPairAndWeight(
   vx: number,
@@ -382,7 +503,7 @@ function computeVertexJointPairAndWeight(
   r: Record<JointId, Vec3>,
   meshNameLower: string = '',
   isMedialOriginMesh: boolean = false
-): { jA: JointId; jB: JointId; wB: number } {
+): VertexBonePair {
   const TRANSITION_M = 0.055; // strict ±5.5cm transition band for knee & elbow
   const DISTAL_TRANSITION_M = 0.025; // strict ±2.5cm transition band for wrist & ankle
 
@@ -398,24 +519,24 @@ function computeVertexJointPairAndWeight(
 
     // 0. Foot sole / plantar guard: below ankleY - 0.025m is 100% bound to ankle
     if (vy < ankleY - DISTAL_TRANSITION_M) {
-      return { jA: kneeId, jB: ankleId, wB: 1.0 };
+      return makePair(kneeId, ankleId, 1.0);
     }
 
     // 1. Pelvic-Hip gluteal origin pinning: above hipY + 0.03m is 100% pelvis
     if (vy >= hipY - 0.12) {
       const wHip = smoothstep(hipY + 0.03, hipY - 0.12, vy);
-      return { jA: 'pelvis', jB: hipId, wB: wHip };
+      return makePair('pelvis', hipId, wHip);
     }
 
     // 2. Mid-thigh down to Knee transition (strict ±5.5cm around kneeY)
     if (vy >= kneeY - TRANSITION_M) {
       const wKnee = smoothstep(kneeY + TRANSITION_M, kneeY - TRANSITION_M, vy);
-      return { jA: hipId, jB: kneeId, wB: wKnee };
+      return makePair(hipId, kneeId, wKnee);
     }
 
     // 3. Lower leg down to Ankle + Foot virtual segment (strict ±2.5cm around ankleY)
     const wAnkle = smoothstep(ankleY + DISTAL_TRANSITION_M, ankleY - DISTAL_TRANSITION_M, vy);
-    return { jA: kneeId, jB: ankleId, wB: wAnkle };
+    return makePair(kneeId, ankleId, wAnkle);
   }
 
   if (zone === 'arm_L' || zone === 'arm_R') {
@@ -429,57 +550,31 @@ function computeVertexJointPairAndWeight(
     const wr = r[wrId];
     const sx = Math.abs(sh[0]);
     const absX = Math.abs(vx);
+
     const isDeltoid = meshNameLower.includes('deltoid');
+    const isRotatorCuff = ROTATOR_CUFF_KEYWORDS.some((kw) => meshNameLower.includes(kw));
+    const isAxillaMuscle = AXILLA_BOUNDARY_KEYWORDS.some((kw) => meshNameLower.includes(kw));
 
-    // Dedicated Deltoid: C1 continuous projection from acromion/clavicle/scapular spine (w=0) to deltoid tuberosity (w=1)
-    if (isDeltoid) {
-      const acromionX = sh[0] * 0.85;
-      const acromionY = sh[1] + 0.045;
-      const tuberosityX = sh[0] * 1.12;
-      const tuberosityY = sh[1] - 0.11;
-      const dx = tuberosityX - acromionX;
-      const dy = tuberosityY - acromionY;
-      const lenSq = dx * dx + dy * dy;
-      const t = lenSq > 1e-6 ? clamp(((vx - acromionX) * dx + (vy - acromionY) * dy) / lenSq, 0, 1) : 1;
-      const wArm = smoothstep(0.05, 0.85, t);
-      return { jA: 'thorax', jB: shId, wB: wArm };
-    }
-
-    const isAxillaMuscle = AXILLA_BOUNDARY_KEYWORDS.some((kw) =>
-      meshNameLower.includes(kw)
-    );
-
-    // 1. Continuous C1 Gaussian humerus-axis field for chest/back muscles (eliminates hard step-function wing):
-    if (isAxillaMuscle || isMedialOriginMesh || (absX < sx - 0.02 && vy > el[1] + TRANSITION_M)) {
-      const hx = (sh[0] + el[0]) * 0.5;
-      const hy = (sh[1] + el[1]) * 0.5;
-      const hz = (sh[2] + el[2]) * 0.5;
-      const abx = hx - sh[0];
-      const aby = hy - sh[1];
-      const abz = hz - sh[2];
-      const abLenSq = abx * abx + aby * aby + abz * abz;
-      const tSeg = abLenSq > 1e-8
-        ? clamp(((vx - sh[0]) * abx + (vy - sh[1]) * aby + (vz - sh[2]) * abz) / abLenSq, 0, 1)
-        : 0;
-      const cx = sh[0] + abx * tSeg;
-      const cy = sh[1] + aby * tSeg;
-      const cz = sh[2] + abz * tSeg;
-      const dHumerus = Math.hypot(vx - cx, vy - cy, vz - cz);
-      const wArm =
-        Math.exp(-Math.pow(dHumerus / 0.065, 2)) *
-        smoothstep(sh[1] - 0.16, sh[1] - 0.02, vy);
-      return { jA: 'thorax', jB: shId, wB: wArm };
+    // 1. Unified 3D shoulder-axilla spatial weight field (deltoid, rotator cuff, axilla/medial-origin muscles)
+    if (
+      isDeltoid ||
+      isRotatorCuff ||
+      isAxillaMuscle ||
+      isMedialOriginMesh ||
+      (absX < sx - 0.02 && vy > el[1] + TRANSITION_M)
+    ) {
+      return computeShoulderAxillaWeightField(vx, vy, vz, side, r, meshNameLower);
     }
 
     // 2. Upper arm down to Elbow transition (strict ±5.5cm around el.y)
     if (vy >= el[1] - TRANSITION_M) {
       const wElbow = smoothstep(el[1] + TRANSITION_M, el[1] - TRANSITION_M, vy);
-      return { jA: shId, jB: elId, wB: wElbow };
+      return makePair(shId, elId, wElbow);
     }
 
     // 3. Forearm down to Wrist + Hand virtual segment (strict ±2.5cm around wr.y, no ballooning)
     const wWrist = smoothstep(wr[1] + DISTAL_TRANSITION_M, wr[1] - DISTAL_TRANSITION_M, vy);
-    return { jA: elId, jB: wrId, wB: wWrist };
+    return makePair(elId, wrId, wWrist);
   }
 
   if (zone === 'head_neck') {
@@ -488,46 +583,28 @@ function computeVertexJointPairAndWeight(
     const thoraxTopY = Math.min(neckY - 0.07, r.thorax[1] + 0.16);
     if (vy <= neckY) {
       const wNeck = smoothstep(thoraxTopY, neckY, vy);
-      return { jA: 'thorax', jB: 'neck', wB: wNeck };
+      return makePair('thorax', 'neck', wNeck);
     }
     const wHead = smoothstep(neckY, headY - 0.03, vy);
-    return { jA: 'neck', jB: 'head', wB: wHead };
+    return makePair('neck', 'head', wHead);
   }
 
-  // Torso (pelvis -> lumbar -> thorax -> neck/head if extending above thoraxTopY)
+  // Torso (pelvis -> lumbar -> thorax -> neck/head or shoulder-axilla field)
   const lumbarY = r.lumbar[1];
   const thoraxY = r.thorax[1];
   const neckY = r.neck[1];
   const headY = r.head[1];
   const hipY = (r.hip_L[1] + r.hip_R[1]) * 0.5;
-  const shSide = vx >= 0 ? 'L' : 'R';
+  const shSide: 'L' | 'R' = vx >= 0 ? 'L' : 'R';
   const sh = r[`shoulder_${shSide}` as JointId];
   const sx = Math.abs(sh[0]);
   const absX = Math.abs(vx);
 
-  // Continuous Gaussian humerus-axis gate for wide chest/back muscles in torso zone
-  if (vy > lumbarY && vy > sh[1] - 0.16 && absX >= sx - 0.08) {
-    const shId = `shoulder_${shSide}` as JointId;
-    const el = r[`elbow_${shSide}` as JointId];
-    const hx = (sh[0] + el[0]) * 0.5;
-    const hy = (sh[1] + el[1]) * 0.5;
-    const hz = (sh[2] + el[2]) * 0.5;
-    const abx = hx - sh[0];
-    const aby = hy - sh[1];
-    const abz = hz - sh[2];
-    const abLenSq = abx * abx + aby * aby + abz * abz;
-    const tSeg = abLenSq > 1e-8
-      ? clamp(((vx - sh[0]) * abx + (vy - sh[1]) * aby + (vz - sh[2]) * abz) / abLenSq, 0, 1)
-      : 0;
-    const cx = sh[0] + abx * tSeg;
-    const cy = sh[1] + aby * tSeg;
-    const cz = sh[2] + abz * tSeg;
-    const dHumerus = Math.hypot(vx - cx, vy - cy, vz - cz);
-    const wArm =
-      Math.exp(-Math.pow(dHumerus / 0.065, 2)) *
-      smoothstep(sh[1] - 0.16, sh[1] - 0.02, vy);
-    if (wArm > 1e-4) {
-      return { jA: 'thorax', jB: shId, wB: wArm };
+  // Unified 3D shoulder-axilla field for wide chest/back/scapular muscles in torso zone
+  if (vy > lumbarY && vy > sh[1] - 0.16 && absX >= sx * 0.42) {
+    const shPair = computeShoulderAxillaWeightField(vx, vy, vz, shSide, r, meshNameLower);
+    if (shPair.wB > 1e-4) {
+      return shPair;
     }
   }
 
@@ -536,10 +613,10 @@ function computeVertexJointPairAndWeight(
   if (vy > thoraxTopY && absX < sx - 0.04) {
     if (vy <= neckY) {
       const wNeck = smoothstep(thoraxTopY, neckY, vy);
-      return { jA: 'thorax', jB: 'neck', wB: wNeck };
+      return makePair('thorax', 'neck', wNeck);
     }
     const wHead = smoothstep(neckY, headY - 0.03, vy);
-    return { jA: 'neck', jB: 'head', wB: wHead };
+    return makePair('neck', 'head', wHead);
   }
 
   // If a torso/gluteal muscle extends below lumbar into the hip region
@@ -547,16 +624,16 @@ function computeVertexJointPairAndWeight(
     const side = vx >= 0 ? 'L' : 'R';
     const hipId = `hip_${side}` as JointId;
     const wHip = smoothstep(hipY + 0.03, hipY - 0.12, vy);
-    return { jA: 'pelvis', jB: hipId, wB: wHip };
+    return makePair('pelvis', hipId, wHip);
   }
 
   if (vy <= lumbarY + 0.04) {
     const wLumbar = smoothstep(lumbarY - 0.04, lumbarY + 0.04, vy);
-    return { jA: 'pelvis', jB: 'lumbar', wB: wLumbar };
+    return makePair('pelvis', 'lumbar', wLumbar);
   }
 
   const wThorax = smoothstep(thoraxY - 0.06, thoraxY + 0.02, vy);
-  return { jA: 'lumbar', jB: 'thorax', wB: wThorax };
+  return makePair('lumbar', 'thorax', wThorax);
 }
 
 /**
@@ -622,7 +699,7 @@ export function prepareAutoSkinnedMuscle(
     const wy = restPositions[i3 + 1];
     const wz = restPositions[i3 + 2];
 
-    const { jA, jB, wB } = computeVertexJointPairAndWeight(
+    const pair = computeVertexJointPairAndWeight(
       wx,
       wy,
       wz,
@@ -632,11 +709,11 @@ export function prepareAutoSkinnedMuscle(
       isMedialOriginMesh
     );
 
-    jointAIndices[i] = JOINT_TO_INDEX[jA];
-    jointBIndices[i] = JOINT_TO_INDEX[jB];
-    weightsB[i] = wB;
-    usedSet.add(jA);
-    usedSet.add(jB);
+    jointAIndices[i] = pair.jAIdx;
+    jointBIndices[i] = pair.jBIdx;
+    weightsB[i] = pair.wB;
+    usedSet.add(pair.jALogical);
+    usedSet.add(pair.jBLogical);
 
     if (normAttr) {
       restNormals[i3] = normAttr.getX(i);
@@ -653,45 +730,108 @@ export function prepareAutoSkinnedMuscle(
 
   posAttr.needsUpdate = true;
 
-  // 3 iterations of topological Laplacian weight smoothing for cross-joint muscles
-  const indexAttr = mesh.geometry.getIndex();
+  // Deduplicated, UV-seam-welded, cross-joint-aware Laplacian weight smoothing (3 iterations)
+  const indexAttr = geo.getIndex();
   if (indexAttr && usedSet.size > 1) {
-    const neighbors: number[][] = Array.from({ length: count }, () => []);
+    // 1. Spatial weld groups (0.5 mm quantization) to weld UV seams
+    const weldKeyToGroup = new Map<string, number>();
+    const vertexGroup = new Int32Array(count);
+    const groupMembers: number[][] = [];
+    for (let i = 0; i < count; i++) {
+      const i3 = i * 3;
+      const key = `${Math.round(restPositions[i3] * 2000)},${Math.round(
+        restPositions[i3 + 1] * 2000
+      )},${Math.round(restPositions[i3 + 2] * 2000)}`;
+      let g = weldKeyToGroup.get(key);
+      if (g === undefined) {
+        g = groupMembers.length;
+        weldKeyToGroup.set(key, g);
+        groupMembers.push([i]);
+      } else {
+        groupMembers[g].push(i);
+      }
+      vertexGroup[i] = g;
+    }
+
+    // 2. Deduplicated neighbor sets on welded vertex groups
+    const groupCount = groupMembers.length;
+    const groupNeighbors: Array<Set<number>> = Array.from(
+      { length: groupCount },
+      () => new Set<number>()
+    );
     const idxArr = indexAttr.array;
     for (let t = 0; t + 2 < idxArr.length; t += 3) {
-      const a = idxArr[t];
-      const b = idxArr[t + 1];
-      const c = idxArr[t + 2];
-      neighbors[a].push(b, c);
-      neighbors[b].push(a, c);
-      neighbors[c].push(a, b);
+      const ga = vertexGroup[idxArr[t]];
+      const gb = vertexGroup[idxArr[t + 1]];
+      const gc = vertexGroup[idxArr[t + 2]];
+      if (ga !== gb) {
+        groupNeighbors[ga].add(gb);
+        groupNeighbors[gb].add(ga);
+      }
+      if (gb !== gc) {
+        groupNeighbors[gb].add(gc);
+        groupNeighbors[gc].add(gb);
+      }
+      if (gc !== ga) {
+        groupNeighbors[gc].add(ga);
+        groupNeighbors[ga].add(gc);
+      }
     }
+
     const wNext = new Float32Array(count);
     for (let iter = 0; iter < 3; iter++) {
-      for (let i = 0; i < count; i++) {
-        const nbrs = neighbors[i];
-        if (nbrs.length === 0) {
-          wNext[i] = weightsB[i];
+      for (let g = 0; g < groupCount; g++) {
+        const members = groupMembers[g];
+        const rep = members[0];
+        const curW = weightsB[rep];
+        const ja = jointAIndices[rep];
+        const jb = jointBIndices[rep];
+        const nbrGroups = groupNeighbors[g];
+
+        // Preserve pure rigid anchors so origin/insertion attachment never drifts
+        if (nbrGroups.size === 0 || curW <= 1e-4 || curW >= 0.9999) {
+          for (let m = 0; m < members.length; m++) {
+            wNext[members[m]] = curW;
+          }
           continue;
         }
-        const ja = jointAIndices[i];
-        const jb = jointBIndices[i];
+
         let sum = 0;
         let cnt = 0;
-        for (let k = 0; k < nbrs.length; k++) {
-          const nb = nbrs[k];
-          if (jointAIndices[nb] === ja && jointBIndices[nb] === jb) {
-            sum += weightsB[nb];
+        for (const ng of nbrGroups) {
+          const nb = groupMembers[ng][0];
+          const nja = jointAIndices[nb];
+          const njb = jointBIndices[nb];
+          const nw = weightsB[nb];
+          if (nja === ja && njb === jb) {
+            sum += nw;
+            cnt++;
+          } else if (nja === jb && njb === ja) {
+            sum += 1 - nw;
+            cnt++;
+          } else if (njb === ja) {
+            // Proximal chain neighbor transitioning into ja -> weight on jb is 0
+            sum += 0;
+            cnt++;
+          } else if (nja === jb) {
+            // Distal chain neighbor transitioning out of jb -> weight on jb is 1
+            sum += 1;
             cnt++;
           }
         }
-        wNext[i] = cnt > 0 ? clamp(0.55 * weightsB[i] + 0.45 * (sum / cnt), 0, 1) : weightsB[i];
+        const smoothed = cnt > 0 ? clamp(0.55 * curW + 0.45 * (sum / cnt), 0, 1) : curW;
+        for (let m = 0; m < members.length; m++) {
+          const vi = members[m];
+          jointAIndices[vi] = ja;
+          jointBIndices[vi] = jb;
+          wNext[vi] = smoothed;
+        }
       }
       weightsB.set(wNext);
     }
   }
 
-  // Write static GPU DQS attributes (aBoneIndex, aBoneWeight)
+  // Write static GPU DQS attributes (aBoneIndex, aBoneWeight) onto the cloned geometry!
   const aBoneIndex = new Float32Array(count * 2);
   const aBoneWeight = new Float32Array(count * 2);
   for (let i = 0; i < count; i++) {
@@ -702,8 +842,8 @@ export function prepareAutoSkinnedMuscle(
     aBoneWeight[i2] = 1 - wb;
     aBoneWeight[i2 + 1] = wb;
   }
-  mesh.geometry.setAttribute('aBoneIndex', new Float32BufferAttribute(aBoneIndex, 2));
-  mesh.geometry.setAttribute('aBoneWeight', new Float32BufferAttribute(aBoneWeight, 2));
+  geo.setAttribute('aBoneIndex', new Float32BufferAttribute(aBoneIndex, 2));
+  geo.setAttribute('aBoneWeight', new Float32BufferAttribute(aBoneWeight, 2));
 
   const usedJoints = Array.from(usedSet);
   const primaryJoint = usedJoints[0] ?? 'pelvis';
@@ -744,59 +884,212 @@ export function prepareAutoSkinnedMuscle(
   };
 }
 
-// Pre-allocated DQS Dual Quaternion table for all 17 joints: [rx, ry, rz, rw, dx, dy, dz, dw]
-const _jointDQ = new Float32Array(ALL_JOINTS.length * 8);
+// Pre-allocated DQS Dual Quaternion table for all 19 bones (17 standard + clavicle_L + clavicle_R):
+// [rx, ry, rz, rw, dx, dy, dz, dw]
+const _jointDQ = new Float32Array(TOTAL_SKIN_BONES * 8);
 const _qTmp = new Quaternion();
+const _neutralPoseFallback = createNeutralPose();
 
-function buildJointDualQuaternions(
+function writeBoneDQ(
+  idx: number,
+  rx: number,
+  ry: number,
+  rz: number,
+  rw: number,
+  worldPos: Vec3,
+  restPos: Vec3,
+  hScale: number
+) {
+  _qTmp.set(rx, ry, rz, rw).normalize();
+  const qx = _qTmp.x;
+  const qy = _qTmp.y;
+  const qz = _qTmp.z;
+  const qw = _qTmp.w;
+
+  const prx = restPos[0] * hScale;
+  const pry = restPos[1] * hScale;
+  const prz = restPos[2] * hScale;
+
+  const cx1 = qy * prz - qz * pry + qw * prx;
+  const cy1 = qz * prx - qx * prz + qw * pry;
+  const cz1 = qx * pry - qy * prx + qw * prz;
+  const rotX = prx + 2 * (qy * cz1 - qz * cy1);
+  const rotY = pry + 2 * (qz * cx1 - qx * cz1);
+  const rotZ = prz + 2 * (qx * cy1 - qy * cx1);
+
+  const tx = worldPos[0] - rotX;
+  const ty = worldPos[1] - rotY;
+  const tz = worldPos[2] - rotZ;
+
+  const dx = 0.5 * (tx * qw + ty * qz - tz * qy);
+  const dy = 0.5 * (-tx * qz + ty * qw + tz * qx);
+  const dz = 0.5 * (tx * qy - ty * qx + tz * qw);
+  const dw = -0.5 * (tx * qx + ty * qy + tz * qz);
+
+  const base = idx * 8;
+  _jointDQ[base] = qx;
+  _jointDQ[base + 1] = qy;
+  _jointDQ[base + 2] = qz;
+  _jointDQ[base + 3] = qw;
+  _jointDQ[base + 4] = dx;
+  _jointDQ[base + 5] = dy;
+  _jointDQ[base + 6] = dz;
+  _jointDQ[base + 7] = dw;
+}
+
+export function buildJointDualQuaternions(
   kinematics: KinematicsResult,
   restJointPositions: Record<JointId, Vec3>,
-  hScale: number
+  hScale: number,
+  pose: PoseMap = _neutralPoseFallback
 ) {
   for (let idx = 0; idx < ALL_JOINTS.length; idx++) {
     const id = ALL_JOINTS[idx];
     const j = kinematics.joints[id];
     const rPos = restJointPositions[id];
-
-    const rx = j.worldQuaternion[0];
-    const ry = j.worldQuaternion[1];
-    const rz = j.worldQuaternion[2];
-    const rw = j.worldQuaternion[3];
-
-    // Translation t = P_world - R * (P_rest * hScale)
-    _qTmp.set(rx, ry, rz, rw);
-    const prx = rPos[0] * hScale;
-    const pry = rPos[1] * hScale;
-    const prz = rPos[2] * hScale;
-
-    // Rotate P_rest by q: v' = v + 2 * cross(q.xyz, cross(q.xyz, v) + q.w * v)
-    const cx1 = ry * prz - rz * pry + rw * prx;
-    const cy1 = rz * prx - rx * prz + rw * pry;
-    const cz1 = rx * pry - ry * prx + rw * prz;
-    const rotX = prx + 2 * (ry * cz1 - rz * cy1);
-    const rotY = pry + 2 * (rz * cx1 - rx * cz1);
-    const rotZ = prz + 2 * (rx * cy1 - ry * cx1);
-
-    const tx = j.worldPosition[0] - rotX;
-    const ty = j.worldPosition[1] - rotY;
-    const tz = j.worldPosition[2] - rotZ;
-
-    // Dual part q_d = 0.5 * (tx*i + ty*j + tz*k) * q_r
-    const dx = 0.5 * (tx * rw + ty * rz - tz * ry);
-    const dy = 0.5 * (-tx * rz + ty * rw + tz * rx);
-    const dz = 0.5 * (tx * ry - ty * rx + tz * rw);
-    const dw = -0.5 * (tx * rx + ty * ry + tz * rz);
-
-    const base = idx * 8;
-    _jointDQ[base] = rx;
-    _jointDQ[base + 1] = ry;
-    _jointDQ[base + 2] = rz;
-    _jointDQ[base + 3] = rw;
-    _jointDQ[base + 4] = dx;
-    _jointDQ[base + 5] = dy;
-    _jointDQ[base + 6] = dz;
-    _jointDQ[base + 7] = dw;
+    writeBoneDQ(
+      idx,
+      j.worldQuaternion[0],
+      j.worldQuaternion[1],
+      j.worldQuaternion[2],
+      j.worldQuaternion[3],
+      j.worldPosition,
+      rPos,
+      hScale
+    );
   }
+
+  const thorax = kinematics.joints.thorax;
+  const clavL = computeClavicleWorldState(
+    'L',
+    pose,
+    thorax,
+    restJointPositions.shoulder_L,
+    restJointPositions.thorax,
+    hScale
+  );
+  writeBoneDQ(
+    CLAVICLE_L_INDEX,
+    clavL.worldQuaternion[0],
+    clavL.worldQuaternion[1],
+    clavL.worldQuaternion[2],
+    clavL.worldQuaternion[3],
+    clavL.worldPosition,
+    clavL.restPosition,
+    hScale
+  );
+
+  const clavR = computeClavicleWorldState(
+    'R',
+    pose,
+    thorax,
+    restJointPositions.shoulder_R,
+    restJointPositions.thorax,
+    hScale
+  );
+  writeBoneDQ(
+    CLAVICLE_R_INDEX,
+    clavR.worldQuaternion[0],
+    clavR.worldQuaternion[1],
+    clavR.worldQuaternion[2],
+    clavR.worldQuaternion[3],
+    clavR.worldPosition,
+    clavR.restPosition,
+    hScale
+  );
+}
+
+/**
+ * Evaluates a single skinned vertex's world position using the currently built _jointDQ table.
+ * Used for zero-GC anchor-only strain computation when full-mesh skinning runs on GPU.
+ */
+export function evaluateSkinnedVertexFromTable(
+  data: SkinnedMuscleData,
+  vertexIndex: number,
+  hScale: number,
+  out: Vector3
+): Vector3 {
+  const baseA = data.jointAIndices[vertexIndex] * 8;
+  const baseB = data.jointBIndices[vertexIndex] * 8;
+  const wB = data.weightsB[vertexIndex];
+  const wA = 1 - wB;
+
+  let rx = _jointDQ[baseA];
+  let ry = _jointDQ[baseA + 1];
+  let rz = _jointDQ[baseA + 2];
+  let rw = _jointDQ[baseA + 3];
+  let dx = _jointDQ[baseA + 4];
+  let dy = _jointDQ[baseA + 5];
+  let dz = _jointDQ[baseA + 6];
+  let dw = _jointDQ[baseA + 7];
+
+  if (wB > 1e-5) {
+    let rBx = _jointDQ[baseB];
+    let rBy = _jointDQ[baseB + 1];
+    let rBz = _jointDQ[baseB + 2];
+    let rBw = _jointDQ[baseB + 3];
+    let dBx = _jointDQ[baseB + 4];
+    let dBy = _jointDQ[baseB + 5];
+    let dBz = _jointDQ[baseB + 6];
+    let dBw = _jointDQ[baseB + 7];
+
+    const dot = rx * rBx + ry * rBy + rz * rBz + rw * rBw;
+    if (dot < 0) {
+      rBx = -rBx; rBy = -rBy; rBz = -rBz; rBw = -rBw;
+      dBx = -dBx; dBy = -dBy; dBz = -dBz; dBw = -dBw;
+    }
+
+    rx = wA * rx + wB * rBx;
+    ry = wA * ry + wB * rBy;
+    rz = wA * rz + wB * rBz;
+    rw = wA * rw + wB * rBw;
+    dx = wA * dx + wB * dBx;
+    dy = wA * dy + wB * dBy;
+    dz = wA * dz + wB * dBz;
+    dw = wA * dw + wB * dBw;
+
+    const invNorm = 1 / Math.hypot(rx, ry, rz, rw);
+    rx *= invNorm; ry *= invNorm; rz *= invNorm; rw *= invNorm;
+    dx *= invNorm; dy *= invNorm; dz *= invNorm; dw *= invNorm;
+  }
+
+  const tx = 2 * (-dw * rx + dx * rw - dy * rz + dz * ry);
+  const ty = 2 * (-dw * ry + dx * rz + dy * rw - dz * rx);
+  const tz = 2 * (-dw * rz - dx * ry + dy * rx + dz * rw);
+
+  const i3 = vertexIndex * 3;
+  const vx = data.restPositions[i3] * hScale;
+  const vy = data.restPositions[i3 + 1] * hScale;
+  const vz = data.restPositions[i3 + 2] * hScale;
+
+  const cx1 = ry * vz - rz * vy + rw * vx;
+  const cy1 = rz * vx - rx * vz + rw * vy;
+  const cz1 = rx * vy - ry * vx + rw * vz;
+
+  return out.set(
+    vx + 2 * (ry * cz1 - rz * cy1) + tx,
+    vy + 2 * (rz * cx1 - rx * cz1) + ty,
+    vz + 2 * (rx * cy1 - ry * cx1) + tz
+  );
+}
+
+/**
+ * Restores exact rest-pose positions & normals onto a muscle geometry (required before GPU DQS rendering
+ * if CPU skinning was run during integrity self-check).
+ */
+export function restoreRestMuscleVertices(data: SkinnedMuscleData): void {
+  const posAttr = data.geometry.getAttribute('position');
+  const normAttr = data.geometry.getAttribute('normal');
+  const { vertexCount, restPositions, restNormals } = data;
+  for (let i = 0; i < vertexCount; i++) {
+    const i3 = i * 3;
+    posAttr.setXYZ(i, restPositions[i3], restPositions[i3 + 1], restPositions[i3 + 2]);
+    if (normAttr) {
+      normAttr.setXYZ(i, restNormals[i3], restNormals[i3 + 1], restNormals[i3 + 2]);
+    }
+  }
+  posAttr.needsUpdate = true;
+  if (normAttr) normAttr.needsUpdate = true;
 }
 
 /**
@@ -807,10 +1100,11 @@ export function updateSkinnedMuscleVertices(
   data: SkinnedMuscleData,
   kinematics: KinematicsResult,
   heightM: number,
-  restJointPositions: Record<JointId, Vec3>
+  restJointPositions: Record<JointId, Vec3>,
+  pose: PoseMap = _neutralPoseFallback
 ): number {
   const hScale = heightM / DEFAULT_HEIGHT_M;
-  buildJointDualQuaternions(kinematics, restJointPositions, hScale);
+  buildJointDualQuaternions(kinematics, restJointPositions, hScale, pose);
 
   const posAttr = data.geometry.getAttribute('position');
   const normAttr = data.geometry.getAttribute('normal');

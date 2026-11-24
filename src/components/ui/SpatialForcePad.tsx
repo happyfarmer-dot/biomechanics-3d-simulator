@@ -1,5 +1,6 @@
 import { ArrowLeftRight, ArrowUpRight, Plus } from 'lucide-react';
 import { useRef } from 'react';
+import { ACTION_TRAJECTORIES } from '../../data/actionTrajectories';
 import { GRAVITY_MPS2, SKELETON_CONFIG } from '../../data/skeletonConfig';
 import { getForceMagnitudeN } from '../../engine/staticsEngine';
 import { useSimStore } from '../../store/useSimStore';
@@ -33,6 +34,7 @@ function vec3ToSpherical(v: Vec3): { magN: number; azimuthDeg: number; elevation
 
 export function SpatialForcePad() {
   const interactionMode = useSimStore((s) => s.interactionMode);
+  const activePresetId = useSimStore((s) => s.activePresetId);
   const forces = useSimStore((s) => s.forces);
   const selectedForceId = useSimStore((s) => s.selectedForceId);
   const selectedJoint = useSimStore((s) => s.selectedJoint) ?? 'knee_R';
@@ -50,6 +52,11 @@ export function SpatialForcePad() {
 
   if (interactionMode !== 'force') return null;
 
+  const hasActionScrubber = Boolean(activePresetId && ACTION_TRAJECTORIES[activePresetId]);
+  const bottomPosClass = hasActionScrubber
+    ? 'bottom-[120px] md:bottom-20'
+    : 'bottom-14 md:bottom-16';
+
   const activeForce =
     forces.find((f) => f.id === selectedForceId) ?? forces[0] ?? null;
 
@@ -57,7 +64,7 @@ export function SpatialForcePad() {
     return (
       <div
         data-testid="spatial-force-pad"
-        className="pointer-events-auto absolute right-3 bottom-14 md:bottom-16 z-20 w-56 rounded-xl border border-red-500/40 bg-slate-950/90 p-3 shadow-2xl backdrop-blur-md space-y-2 text-xs"
+        className={`pointer-events-auto absolute right-3 ${bottomPosClass} z-20 w-56 rounded-xl border border-red-500/40 bg-slate-950/90 p-3 shadow-2xl backdrop-blur-md space-y-2 text-xs`}
       >
         <div className="font-semibold text-red-200 flex items-center gap-1.5">
           <ArrowUpRight className="h-3.5 w-3.5 text-red-400" />
@@ -128,7 +135,7 @@ export function SpatialForcePad() {
   return (
     <div
       data-testid="spatial-force-pad"
-      className="pointer-events-auto absolute right-3 bottom-14 md:bottom-16 z-20 w-[238px] rounded-xl border border-red-500/40 bg-slate-950/90 p-2.5 shadow-2xl backdrop-blur-md space-y-2"
+      className={`pointer-events-auto absolute right-3 ${bottomPosClass} z-20 w-[238px] rounded-xl border border-red-500/40 bg-slate-950/90 p-2.5 shadow-2xl backdrop-blur-md space-y-2`}
     >
       <div className="flex items-center justify-between gap-1 text-[11px]">
         <span className="font-semibold text-red-200 truncate">

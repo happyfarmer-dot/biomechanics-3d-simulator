@@ -99,7 +99,7 @@ export const SKELETON_CONFIG: Record<JointId, JointConfig> = {
     massRatio: 0.0325,
     comRatio: 0.436,
     boneRadius: 0.028,
-    romLimits: { flexion: [-50, 180], abduction: [-30, 180], rotation: [-90, 70] },
+    romLimits: { flexion: [-50, 180], abduction: [-30, 180], rotation: [-70, 90] },
   },
   elbow_L: {
     id: 'elbow_L',
@@ -134,7 +134,7 @@ export const SKELETON_CONFIG: Record<JointId, JointConfig> = {
     massRatio: 0.0325,
     comRatio: 0.436,
     boneRadius: 0.028,
-    romLimits: { flexion: [-50, 180], abduction: [-30, 180], rotation: [-90, 70] },
+    romLimits: { flexion: [-50, 180], abduction: [-30, 180], rotation: [-70, 90] },
   },
   elbow_R: {
     id: 'elbow_R',
@@ -280,7 +280,7 @@ export function getJointSliderLimits(jointId: JointId): {
     return { flexion: [-25, 30], abduction: [-25, 30], rotation: [-30, 30] };
   }
   if (jointId.startsWith('shoulder_')) {
-    return { flexion: [-65, 180], abduction: [-45, 180], rotation: [-100, 90] };
+    return { flexion: [-65, 180], abduction: [-45, 180], rotation: [-90, 100] };
   }
   const rom = SKELETON_CONFIG[jointId].romLimits;
   return {

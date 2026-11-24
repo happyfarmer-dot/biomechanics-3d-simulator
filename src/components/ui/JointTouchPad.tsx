@@ -1,11 +1,12 @@
 import { Compass, RotateCcw } from 'lucide-react';
 import { useEffect, useRef, useState } from 'react';
-import { Euler, Quaternion, Vector3 } from 'three';
+import { Quaternion, Vector3 } from 'three';
+import { ACTION_TRAJECTORIES } from '../../data/actionTrajectories';
 import { getJointSliderLimits, SKELETON_CONFIG } from '../../data/skeletonConfig';
 import {
   anatomicalToEuler,
-  eulerToAnatomical,
   localEulerToQuaternion,
+  quaternionToAnatomicalContinuous,
 } from '../../engine/kinematics';
 import { useSimStore } from '../../store/useSimStore';
 import type { JointId } from '../../types/biomechanics';
@@ -34,6 +35,7 @@ export function JointTouchPad() {
   const showJointHandles = useSimStore((s) => s.showJointHandles);
   const selectedJoint = useSimStore((s) => s.selectedJoint);
   const interactionMode = useSimStore((s) => s.interactionMode);
+  const activePresetId = useSimStore((s) => s.activePresetId);
   const pose = useSimStore((s) => s.pose);
   const jointRiskMap = useSimStore((s) => s.jointRiskMap);
   const setJointAngles = useSimStore((s) => s.setJointAngles);
@@ -145,8 +147,7 @@ export function JointTouchPad() {
               const curAngles = state.pose[jId];
               const currentQ = localEulerToQuaternion(anatomicalToEuler(jId, curAngles));
               const nextQ = deltaQ.multiply(currentQ);
-              const nextEuler = new Euler().setFromQuaternion(nextQ, 'ZXY');
-              const nextAnat = eulerToAnatomical(jId, nextEuler);
+              const nextAnat = quaternionToAnatomicalContinuous(jId, nextQ, curAngles);
 
               state.setJointAngles(jId, {
                 flexion: Math.round(nextAnat.flexion * 10) / 10,
@@ -230,10 +231,14 @@ export function JointTouchPad() {
       ? 'bg-amber-400'
       : 'bg-emerald-400';
 
+  const hasActionScrubber = Boolean(activePresetId && ACTION_TRAJECTORIES[activePresetId]);
+
   return (
     <div
       data-testid="joint-touch-pad"
-      className="pointer-events-auto absolute right-3 bottom-14 md:bottom-16 z-20 rounded-xl border border-slate-700/80 bg-slate-950/90 p-2.5 shadow-2xl backdrop-blur-md space-y-2"
+      className={`pointer-events-auto absolute right-3 ${
+        hasActionScrubber ? 'bottom-[120px] md:bottom-20' : 'bottom-14 md:bottom-16'
+      } z-20 rounded-xl border border-slate-700/80 bg-slate-950/90 p-2.5 shadow-2xl backdrop-blur-md space-y-2`}
     >
       <div className="flex items-center justify-between gap-2 text-[11px]">
         <span className="flex items-center gap-1 font-semibold text-sky-200">

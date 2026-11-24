@@ -18,7 +18,33 @@ const AXIS_LABELS: Record<keyof AnatomicalAngles, string> = {
   rotation: '軸向旋轉',
 };
 
-export function evaluateSingleAxisRom(pose: PoseMap): InjuryAlert[] {
+export interface InjuryEvalOptions {
+  sexProfile?: 'male' | 'female';
+  romToleranceBoost?: boolean;
+}
+
+export function getEffectiveRomLimits(
+  rawLimits: [number, number],
+  options: InjuryEvalOptions = {}
+): [number, number] {
+  const sexMarginRatio = options.sexProfile === 'female' ? 0.05 : 0;
+  const boostRatio = options.romToleranceBoost ? 0.15 : 0;
+  const totalRatio = sexMarginRatio + boostRatio;
+  if (totalRatio <= 0) return rawLimits;
+
+  const [rawMin, rawMax] = rawLimits;
+  const minBoost = options.romToleranceBoost ? 8 : 0;
+  const nextMin =
+    rawMin === 0 ? 0 : Math.round((rawMin - Math.max(Math.abs(rawMin) * totalRatio, minBoost)) * 10) / 10;
+  const nextMax =
+    rawMax === 0 ? 0 : Math.round((rawMax + Math.max(Math.abs(rawMax) * totalRatio, minBoost)) * 10) / 10;
+  return [nextMin, nextMax];
+}
+
+export function evaluateSingleAxisRom(
+  pose: PoseMap,
+  options: InjuryEvalOptions = {}
+): InjuryAlert[] {
   const alerts: InjuryAlert[] = [];
 
   for (const jointId of JOINT_ORDER) {
@@ -30,7 +56,7 @@ export function evaluateSingleAxisRom(pose: PoseMap): InjuryAlert[] {
 
     for (const axis of ['flexion', 'abduction', 'rotation'] as const) {
       const val = angles[axis];
-      const [min, max] = cfg.romLimits[axis];
+      const [min, max] = getEffectiveRomLimits(cfg.romLimits[axis], options);
 
       if (val < min || val > max) {
         alerts.push({
@@ -91,11 +117,35 @@ export function evaluateCompositeRules(pose: PoseMap): InjuryAlert[] {
 
 export function evaluateForceRules(
   pose: PoseMap,
-  loads: Record<JointId, JointLoadResult>
+  loads: Record<JointId, JointLoadResult>,
+  options: InjuryEvalOptions = {}
 ): InjuryAlert[] {
   const alerts: InjuryAlert[] = [];
+  const isFemale = options.sexProfile === 'female';
+  const lumbarLimitN = isFemale ? 3000 : 3400;
 
   for (const rule of FORCE_OVERLOAD_RULES) {
+    if (rule.id === 'lumbar_compression_niosh' && isFemale) {
+      const lumbar = loads.lumbar;
+      if (
+        lumbar?.lumbarEstimatedCompressionN !== undefined &&
+        lumbar.lumbarEstimatedCompressionN > lumbarLimitN
+      ) {
+        alerts.push({
+          id: `force_${rule.id}_lumbar`,
+          category: 'force',
+          jointId: 'lumbar',
+          severity: 'critical',
+          title: `腰椎壓縮力超標（女性基準 > ${lumbarLimitN} 牛頓）`,
+          tissue: rule.tissue,
+          mechanism: rule.mechanism,
+          recommendation: rule.recommendation,
+          valueText: `${Math.round(lumbar.lumbarEstimatedCompressionN)} 牛頓 (> ${lumbarLimitN})`,
+        });
+      }
+      continue;
+    }
+
     const hits = rule.check(pose, loads);
     for (const hit of hits) {
       alerts.push({
@@ -117,12 +167,13 @@ export function evaluateForceRules(
 
 export function evaluateAllInjuries(
   pose: PoseMap,
-  loads: Record<JointId, JointLoadResult>
+  loads: Record<JointId, JointLoadResult>,
+  options: InjuryEvalOptions = {}
 ): InjuryAlert[] {
   return [
     ...evaluateCompositeRules(pose),
-    ...evaluateForceRules(pose, loads),
-    ...evaluateSingleAxisRom(pose),
+    ...evaluateForceRules(pose, loads, options),
+    ...evaluateSingleAxisRom(pose, options),
   ];
 }
 

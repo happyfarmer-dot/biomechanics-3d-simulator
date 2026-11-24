@@ -93,7 +93,14 @@ interface SimState {
   applyPosePatch: (patch: Partial<PoseMap>) => void;
   placeForceAtPoint: (targetJoint: JointId, worldPoint: Vec3) => void;
   setForceVector: (id: string, vec: Vec3) => void;
-  setPose: (pose: PoseMap) => void;
+  setPose: (pose: PoseMap, preservePreset?: boolean) => void;
+  hydrateSharedState: (payload: {
+    pose: PoseMap;
+    forces: SpatialForce[];
+    dynamicLoadFactor?: number;
+    muscleEffectMode?: 'anatomy' | 'strain';
+    muscleStrainSubMode?: 'geometric' | 'activeTension';
+  }) => void;
   applyPreset: (presetId: string) => void;
   resetPose: () => void;
   setAnthropometry: (heightM: number, bodyMassKg: number) => void;
@@ -114,12 +121,23 @@ function evaluateAll(
   includeGravity: boolean,
   focusedJointId: JointId | null,
   selectedJoint: JointId | null,
-  calibratedOffsets: Record<JointId, Vec3> | null
+  calibratedOffsets: Record<JointId, Vec3> | null,
+  dynamicLoadFactor: number = 1.0,
+  sexProfile: 'male' | 'female' = 'male',
+  romToleranceBoost: boolean = false
 ) {
   const kinematics = computeKinematics(pose, heightM, calibratedOffsets);
   const muscles = evaluateMuscles(kinematics, heightM);
-  const loads = computeStatics(kinematics, forces, { includeGravity, bodyMassKg, heightM });
-  const alerts = evaluateAllInjuries(pose, loads);
+  const loads = computeStatics(kinematics, forces, {
+    includeGravity,
+    bodyMassKg,
+    heightM,
+    dynamicLoadFactor,
+  });
+  const alerts = evaluateAllInjuries(pose, loads, {
+    sexProfile,
+    romToleranceBoost,
+  });
   const jointRiskMap = getJointRiskMap(alerts);
   const macroJoint = focusedJointId ?? selectedJoint;
   const focusedSoftTissues = macroJoint
@@ -137,7 +155,10 @@ const initialDerived = evaluateAll(
   true,
   null,
   'knee_R',
-  null
+  null,
+  1.0,
+  'male',
+  false
 );
 
 export const useSimStore = create<SimState>((set, get) => ({
@@ -187,10 +208,58 @@ export const useSimStore = create<SimState>((set, get) => ({
   setShowJointHandles: (showJointHandles) => set({ showJointHandles }),
   setMuscleEffectMode: (muscleEffectMode) => set({ muscleEffectMode }),
   setMuscleStrainSubMode: (muscleStrainSubMode) => set({ muscleStrainSubMode }),
-  setDynamicLoadFactor: (dynamicLoadFactor) =>
-    set({ dynamicLoadFactor: Math.max(1.0, Math.min(3.0, dynamicLoadFactor)) }),
-  setSexProfile: (sexProfile) => set({ sexProfile }),
-  setRomToleranceBoost: (romToleranceBoost) => set({ romToleranceBoost }),
+  setDynamicLoadFactor: (factor) => {
+    const s = get();
+    const dynamicLoadFactor = Math.max(1.0, Math.min(3.0, factor));
+    const derived = evaluateAll(
+      s.pose,
+      s.forces,
+      s.heightM,
+      s.bodyMassKg,
+      s.includeGravity,
+      s.focusedJointId,
+      s.selectedJoint,
+      s.calibratedOffsets,
+      dynamicLoadFactor,
+      s.sexProfile,
+      s.romToleranceBoost
+    );
+    set({ dynamicLoadFactor, ...derived });
+  },
+  setSexProfile: (sexProfile) => {
+    const s = get();
+    const derived = evaluateAll(
+      s.pose,
+      s.forces,
+      s.heightM,
+      s.bodyMassKg,
+      s.includeGravity,
+      s.focusedJointId,
+      s.selectedJoint,
+      s.calibratedOffsets,
+      s.dynamicLoadFactor,
+      sexProfile,
+      s.romToleranceBoost
+    );
+    set({ sexProfile, ...derived });
+  },
+  setRomToleranceBoost: (romToleranceBoost) => {
+    const s = get();
+    const derived = evaluateAll(
+      s.pose,
+      s.forces,
+      s.heightM,
+      s.bodyMassKg,
+      s.includeGravity,
+      s.focusedJointId,
+      s.selectedJoint,
+      s.calibratedOffsets,
+      s.dynamicLoadFactor,
+      s.sexProfile,
+      romToleranceBoost
+    );
+    set({ romToleranceBoost, ...derived });
+  },
   setSkinOpacity: (skinOpacity) => set({ skinOpacity: Math.max(0.15, Math.min(1, skinOpacity)) }),
   setMuscleStrainSummary: (muscleStrainSummary) => set({ muscleStrainSummary }),
 
@@ -237,7 +306,10 @@ export const useSimStore = create<SimState>((set, get) => ({
       s.includeGravity,
       s.focusedJointId,
       s.selectedJoint,
-      calibratedOffsets
+      calibratedOffsets,
+      s.dynamicLoadFactor,
+      s.sexProfile,
+      s.romToleranceBoost
     );
     set({ calibratedOffsets, ...derived });
   },
@@ -293,7 +365,10 @@ export const useSimStore = create<SimState>((set, get) => ({
       s.includeGravity,
       s.focusedJointId,
       s.selectedJoint,
-      s.calibratedOffsets
+      s.calibratedOffsets,
+      s.dynamicLoadFactor,
+      s.sexProfile,
+      s.romToleranceBoost
     );
     set({ pose: nextPose, activePresetId: null, ...derived });
   },
@@ -309,7 +384,10 @@ export const useSimStore = create<SimState>((set, get) => ({
       s.includeGravity,
       s.focusedJointId,
       s.selectedJoint,
-      s.calibratedOffsets
+      s.calibratedOffsets,
+      s.dynamicLoadFactor,
+      s.sexProfile,
+      s.romToleranceBoost
     );
     set({ pose: nextPose, activePresetId: null, ...derived });
   },
@@ -372,7 +450,10 @@ export const useSimStore = create<SimState>((set, get) => ({
       s.includeGravity,
       s.focusedJointId,
       s.selectedJoint,
-      s.calibratedOffsets
+      s.calibratedOffsets,
+      s.dynamicLoadFactor,
+      s.sexProfile,
+      s.romToleranceBoost
     );
     set({
       forces: nextForces,
@@ -387,7 +468,7 @@ export const useSimStore = create<SimState>((set, get) => ({
     get().updateForce(id, { forceVectorWorld: vec });
   },
 
-  setPose: (pose) => {
+  setPose: (pose, preservePreset = false) => {
     const s = get();
     const derived = evaluateAll(
       pose,
@@ -397,9 +478,50 @@ export const useSimStore = create<SimState>((set, get) => ({
       s.includeGravity,
       s.focusedJointId,
       s.selectedJoint,
-      s.calibratedOffsets
+      s.calibratedOffsets,
+      s.dynamicLoadFactor,
+      s.sexProfile,
+      s.romToleranceBoost
     );
-    set({ pose, activePresetId: null, ...derived });
+    set({
+      pose,
+      activePresetId: preservePreset ? s.activePresetId : null,
+      ...derived,
+    });
+  },
+
+  hydrateSharedState: (payload) => {
+    const s = get();
+    const nextPose = structuredClone(payload.pose);
+    const nextForces = structuredClone(payload.forces);
+    const nextDaf = Math.max(1.0, Math.min(3.0, payload.dynamicLoadFactor ?? s.dynamicLoadFactor));
+    const nextEffectMode = payload.muscleEffectMode ?? s.muscleEffectMode;
+    const nextSubMode = payload.muscleStrainSubMode ?? s.muscleStrainSubMode;
+    const nextSelectedForce = nextForces.length > 0 ? nextForces[0].id : null;
+
+    const derived = evaluateAll(
+      nextPose,
+      nextForces,
+      s.heightM,
+      s.bodyMassKg,
+      s.includeGravity,
+      s.focusedJointId,
+      s.selectedJoint,
+      s.calibratedOffsets,
+      nextDaf,
+      s.sexProfile,
+      s.romToleranceBoost
+    );
+    set({
+      pose: nextPose,
+      forces: nextForces,
+      dynamicLoadFactor: nextDaf,
+      muscleEffectMode: nextEffectMode,
+      muscleStrainSubMode: nextSubMode,
+      selectedForceId: nextSelectedForce,
+      activePresetId: null,
+      ...derived,
+    });
   },
 
   applyPreset: (presetId) => {
@@ -421,7 +543,10 @@ export const useSimStore = create<SimState>((set, get) => ({
       preset.includeGravity,
       nextFocus,
       nextSelected,
-      s.calibratedOffsets
+      s.calibratedOffsets,
+      s.dynamicLoadFactor,
+      s.sexProfile,
+      s.romToleranceBoost
     );
     set({
       pose: clonedPose,
@@ -452,7 +577,10 @@ export const useSimStore = create<SimState>((set, get) => ({
       s.includeGravity,
       s.focusedJointId,
       s.selectedJoint,
-      s.calibratedOffsets
+      s.calibratedOffsets,
+      s.dynamicLoadFactor,
+      s.sexProfile,
+      s.romToleranceBoost
     );
     set({ heightM: clampedH, bodyMassKg: clampedM, ...derived });
   },
@@ -467,7 +595,10 @@ export const useSimStore = create<SimState>((set, get) => ({
       includeGravity,
       s.focusedJointId,
       s.selectedJoint,
-      s.calibratedOffsets
+      s.calibratedOffsets,
+      s.dynamicLoadFactor,
+      s.sexProfile,
+      s.romToleranceBoost
     );
     set({ includeGravity, ...derived });
   },
@@ -487,7 +618,10 @@ export const useSimStore = create<SimState>((set, get) => ({
       s.includeGravity,
       s.focusedJointId,
       s.selectedJoint,
-      s.calibratedOffsets
+      s.calibratedOffsets,
+      s.dynamicLoadFactor,
+      s.sexProfile,
+      s.romToleranceBoost
     );
     set({
       forces: nextForces,
@@ -509,7 +643,10 @@ export const useSimStore = create<SimState>((set, get) => ({
       s.includeGravity,
       s.focusedJointId,
       s.selectedJoint,
-      s.calibratedOffsets
+      s.calibratedOffsets,
+      s.dynamicLoadFactor,
+      s.sexProfile,
+      s.romToleranceBoost
     );
     set({ forces: nextForces, activePresetId: null, ...derived });
   },
@@ -536,7 +673,10 @@ export const useSimStore = create<SimState>((set, get) => ({
       s.includeGravity,
       s.focusedJointId,
       s.selectedJoint,
-      s.calibratedOffsets
+      s.calibratedOffsets,
+      s.dynamicLoadFactor,
+      s.sexProfile,
+      s.romToleranceBoost
     );
     set({ forces: nextForces, activePresetId: null, ...derived });
   },
@@ -554,7 +694,10 @@ export const useSimStore = create<SimState>((set, get) => ({
       s.includeGravity,
       s.focusedJointId,
       s.selectedJoint,
-      s.calibratedOffsets
+      s.calibratedOffsets,
+      s.dynamicLoadFactor,
+      s.sexProfile,
+      s.romToleranceBoost
     );
     set({
       forces: nextForces,

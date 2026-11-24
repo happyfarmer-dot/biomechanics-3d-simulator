@@ -1,8 +1,11 @@
 import { Quaternion } from 'three';
-import { JOINT_ORDER } from './skeletonConfig';
-import { createNeutralPose } from './skeletonConfig';
-import { anatomicalToEuler, eulerToAnatomical, localEulerToQuaternion } from '../engine/kinematics';
-import type { JointId, PoseMap } from '../types/biomechanics';
+import { createNeutralPose, JOINT_ORDER } from './skeletonConfig';
+import {
+  anatomicalToEuler,
+  localEulerToQuaternion,
+  quaternionToAnatomicalContinuous,
+} from '../engine/kinematics';
+import type { AnatomicalAngles, JointId, PoseMap } from '../types/biomechanics';
 
 export interface ActionKeyframe {
   t: number; // 0 .. 1
@@ -26,8 +29,8 @@ export const ACTION_TRAJECTORIES: Record<string, ActionTrajectory> = {
     title: '槓鈴深蹲軌跡',
     keyframes: [
       { t: 0, label: '站立預備', pose: poseWith({ shoulder_L: { flexion: -20, abduction: 65, rotation: 55 }, shoulder_R: { flexion: -20, abduction: 65, rotation: 55 }, elbow_L: { flexion: 110, abduction: 0, rotation: 0 }, elbow_R: { flexion: 110, abduction: 0, rotation: 0 } }) },
-      { t: 0.5, label: '離心半蹲', pose: poseWith({ lumbar: { flexion: 10, abduction: 0, rotation: 0 }, hip_L: { flexion: 55, abduction: 12, rotation: -6 }, hip_R: { flexion: 55, abduction: 12, rotation: -6 }, knee_L: { flexion: 60, abduction: 0, rotation: 0 }, knee_R: { flexion: 60, abduction: 0, rotation: 0 }, ankle_L: { flexion: 12, abduction: 0, rotation: 0 }, ankle_R: { flexion: 12, abduction: 0, rotation: 0 }, shoulder_L: { flexion: -20, abduction: 65, rotation: 55 }, shoulder_R: { flexion: -20, abduction: 65, rotation: 55 }, elbow_L: { flexion: 110, abduction: 0, rotation: 0 }, elbow_R: { flexion: 110, abduction: 0, rotation: 0 } }) },
-      { t: 1, label: '深蹲底端', pose: poseWith({ lumbar: { flexion: 18, abduction: 0, rotation: 0 }, thorax: { flexion: 10, abduction: 0, rotation: 0 }, neck: { flexion: -15, abduction: 0, rotation: 0 }, shoulder_L: { flexion: -20, abduction: 65, rotation: 55 }, shoulder_R: { flexion: -20, abduction: 65, rotation: 55 }, elbow_L: { flexion: 110, abduction: 0, rotation: 0 }, elbow_R: { flexion: 110, abduction: 0, rotation: 0 }, hip_L: { flexion: 105, abduction: 18, rotation: -12 }, hip_R: { flexion: 105, abduction: 18, rotation: -12 }, knee_L: { flexion: 115, abduction: 0, rotation: 0 }, knee_R: { flexion: 115, abduction: 0, rotation: 0 }, ankle_L: { flexion: 22, abduction: 0, rotation: 0 }, ankle_R: { flexion: 22, abduction: 0, rotation: 0 } }) },
+      { t: 0.5, label: '離心半蹲', pose: poseWith({ lumbar: { flexion: 10, abduction: 0, rotation: 0 }, hip_L: { flexion: 55, abduction: 12, rotation: 6 }, hip_R: { flexion: 55, abduction: 12, rotation: 6 }, knee_L: { flexion: 60, abduction: 0, rotation: 0 }, knee_R: { flexion: 60, abduction: 0, rotation: 0 }, ankle_L: { flexion: 12, abduction: 0, rotation: 0 }, ankle_R: { flexion: 12, abduction: 0, rotation: 0 }, shoulder_L: { flexion: -20, abduction: 65, rotation: 55 }, shoulder_R: { flexion: -20, abduction: 65, rotation: 55 }, elbow_L: { flexion: 110, abduction: 0, rotation: 0 }, elbow_R: { flexion: 110, abduction: 0, rotation: 0 } }) },
+      { t: 1, label: '深蹲底端', pose: poseWith({ lumbar: { flexion: 18, abduction: 0, rotation: 0 }, thorax: { flexion: 10, abduction: 0, rotation: 0 }, neck: { flexion: -15, abduction: 0, rotation: 0 }, shoulder_L: { flexion: -20, abduction: 65, rotation: 55 }, shoulder_R: { flexion: -20, abduction: 65, rotation: 55 }, elbow_L: { flexion: 110, abduction: 0, rotation: 0 }, elbow_R: { flexion: 110, abduction: 0, rotation: 0 }, hip_L: { flexion: 105, abduction: 18, rotation: 12 }, hip_R: { flexion: 105, abduction: 18, rotation: 12 }, knee_L: { flexion: 115, abduction: 0, rotation: 0 }, knee_R: { flexion: 115, abduction: 0, rotation: 0 }, ankle_L: { flexion: 22, abduction: 0, rotation: 0 }, ankle_R: { flexion: 22, abduction: 0, rotation: 0 } }) },
     ],
   },
   romanian_deadlift: {
@@ -43,9 +46,9 @@ export const ACTION_TRAJECTORIES: Record<string, ActionTrajectory> = {
     presetId: 'flat_bench_press_bottom',
     title: '平板臥推軌跡',
     keyframes: [
-      { t: 0, label: '頂端鎖定', pose: poseWith({ pelvis: { flexion: -88, abduction: 0, rotation: 0 }, shoulder_L: { flexion: 85, abduction: 15, rotation: 0 }, shoulder_R: { flexion: 85, abduction: 15, rotation: 0 }, hip_L: { flexion: 70, abduction: 15, rotation: 0 }, hip_R: { flexion: 70, abduction: 15, rotation: 0 }, knee_L: { flexion: 85, abduction: 0, rotation: 0 }, knee_R: { flexion: 85, abduction: 0, rotation: 0 } }) },
-      { t: 0.5, label: '下放中段', pose: poseWith({ pelvis: { flexion: -88, abduction: 0, rotation: 0 }, shoulder_L: { flexion: 35, abduction: 45, rotation: 22 }, shoulder_R: { flexion: 35, abduction: 45, rotation: 22 }, elbow_L: { flexion: 45, abduction: 0, rotation: 0 }, elbow_R: { flexion: 45, abduction: 0, rotation: 0 }, hip_L: { flexion: 70, abduction: 15, rotation: 0 }, hip_R: { flexion: 70, abduction: 15, rotation: 0 }, knee_L: { flexion: 85, abduction: 0, rotation: 0 }, knee_R: { flexion: 85, abduction: 0, rotation: 0 } }) },
-      { t: 1, label: '觸胸底端', pose: poseWith({ pelvis: { flexion: -88, abduction: 0, rotation: 0 }, shoulder_L: { flexion: -20, abduction: 75, rotation: 45 }, shoulder_R: { flexion: -20, abduction: 75, rotation: 45 }, elbow_L: { flexion: 90, abduction: 0, rotation: 0 }, elbow_R: { flexion: 90, abduction: 0, rotation: 0 }, hip_L: { flexion: 70, abduction: 15, rotation: 0 }, hip_R: { flexion: 70, abduction: 15, rotation: 0 }, knee_L: { flexion: 85, abduction: 0, rotation: 0 }, knee_R: { flexion: 85, abduction: 0, rotation: 0 } }) },
+      { t: 0, label: '頂端鎖定', pose: poseWith({ pelvis: { flexion: -88, abduction: 0, rotation: 0 }, shoulder_L: { flexion: 85, abduction: 15, rotation: 0 }, shoulder_R: { flexion: 85, abduction: 15, rotation: 0 }, hip_L: { flexion: -10, abduction: 15, rotation: 0 }, hip_R: { flexion: -10, abduction: 15, rotation: 0 }, knee_L: { flexion: 80, abduction: 0, rotation: 0 }, knee_R: { flexion: 80, abduction: 0, rotation: 0 } }) },
+      { t: 0.5, label: '下放中段', pose: poseWith({ pelvis: { flexion: -88, abduction: 0, rotation: 0 }, shoulder_L: { flexion: 35, abduction: 45, rotation: 22 }, shoulder_R: { flexion: 35, abduction: 45, rotation: 22 }, elbow_L: { flexion: 45, abduction: 0, rotation: 0 }, elbow_R: { flexion: 45, abduction: 0, rotation: 0 }, hip_L: { flexion: -10, abduction: 15, rotation: 0 }, hip_R: { flexion: -10, abduction: 15, rotation: 0 }, knee_L: { flexion: 80, abduction: 0, rotation: 0 }, knee_R: { flexion: 80, abduction: 0, rotation: 0 } }) },
+      { t: 1, label: '觸胸底端', pose: poseWith({ pelvis: { flexion: -88, abduction: 0, rotation: 0 }, shoulder_L: { flexion: -20, abduction: 75, rotation: 45 }, shoulder_R: { flexion: -20, abduction: 75, rotation: 45 }, elbow_L: { flexion: 90, abduction: 0, rotation: 0 }, elbow_R: { flexion: 90, abduction: 0, rotation: 0 }, hip_L: { flexion: -10, abduction: 15, rotation: 0 }, hip_R: { flexion: -10, abduction: 15, rotation: 0 }, knee_L: { flexion: 80, abduction: 0, rotation: 0 }, knee_R: { flexion: 80, abduction: 0, rotation: 0 } }) },
     ],
   },
   standing_overhead_press: {
@@ -80,6 +83,7 @@ export const ACTION_TRAJECTORIES: Record<string, ActionTrajectory> = {
 const _qA = new Quaternion();
 const _qB = new Quaternion();
 const _qOut = new Quaternion();
+const _refAngles: AnatomicalAngles = { flexion: 0, abduction: 0, rotation: 0 };
 
 export function interpolatePoseSlerp(keyframes: ActionKeyframe[], t: number): PoseMap {
   const clampedT = Math.max(0, Math.min(1, t));
@@ -101,21 +105,19 @@ export function interpolatePoseSlerp(keyframes: ActionKeyframe[], t: number): Po
 
   const out = createNeutralPose();
   for (const jId of JOINT_ORDER as JointId[]) {
-    const eA = anatomicalToEuler(jId, kfA.pose[jId]);
-    const eB = anatomicalToEuler(jId, kfB.pose[jId]);
+    const a = kfA.pose[jId];
+    const b = kfB.pose[jId];
+    const eA = anatomicalToEuler(jId, a);
+    const eB = anatomicalToEuler(jId, b);
     _qA.copy(localEulerToQuaternion(eA));
     _qB.copy(localEulerToQuaternion(eB));
     _qOut.copy(_qA).slerp(_qB, alpha);
-    const eulerOut = new (kfA.pose ? Object.getPrototypeOf(_qOut).constructor : Quaternion)();
-    void eulerOut;
-    // Convert _qOut back to Euler ZXY
-    const threeEuler = new (awaitEulerClass())(0, 0, 0, 'ZXY').setFromQuaternion(_qOut, 'ZXY');
-    out[jId] = eulerToAnatomical(jId, threeEuler);
+
+    _refAngles.flexion = a.flexion + (b.flexion - a.flexion) * alpha;
+    _refAngles.abduction = a.abduction + (b.abduction - a.abduction) * alpha;
+    _refAngles.rotation = a.rotation + (b.rotation - a.rotation) * alpha;
+
+    out[jId] = quaternionToAnatomicalContinuous(jId, _qOut, _refAngles);
   }
   return out;
-}
-
-import { Euler } from 'three';
-function awaitEulerClass() {
-  return Euler;
 }

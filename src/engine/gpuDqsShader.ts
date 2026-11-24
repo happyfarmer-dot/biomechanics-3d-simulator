@@ -4,10 +4,13 @@ import { computeClavicleWorldState } from './kinematics';
 import type { JointId, KinematicsResult, PoseMap, Vec3 } from '../types/biomechanics';
 
 export const MAX_DQS_BONES = 19; // 17 standard joints + clavicle_L (17) + clavicle_R (18)
+export const CLAVICLE_L_BONE_INDEX = 17;
+export const CLAVICLE_R_BONE_INDEX = 18;
 
 export interface GpuDqsUniforms {
   uBoneDqReal: { value: Vector4[] };
   uBoneDqDual: { value: Vector4[] };
+  uHeightScale: { value: number };
 }
 
 export function createGpuDqsUniforms(): GpuDqsUniforms {
@@ -20,6 +23,7 @@ export function createGpuDqsUniforms(): GpuDqsUniforms {
   return {
     uBoneDqReal: { value: uBoneDqReal },
     uBoneDqDual: { value: uBoneDqDual },
+    uHeightScale: { value: 1.0 },
   };
 }
 
@@ -62,6 +66,7 @@ export function updateGpuDqsUniforms(
   hScale: number,
   pose: PoseMap
 ): void {
+  uniforms.uHeightScale.value = hScale;
   const realArr = uniforms.uBoneDqReal.value;
   const dualArr = uniforms.uBoneDqDual.value;
 
@@ -74,13 +79,27 @@ export function updateGpuDqsUniforms(
 
   // Scapulohumeral Rhythm virtual bones: 17 = clavicle_L, 18 = clavicle_R
   const thoraxState = kinematics.joints.thorax;
-  const clavL = computeClavicleWorldState('L', pose, thoraxState, restPositions.shoulder_L);
+  const clavL = computeClavicleWorldState(
+    'L',
+    pose,
+    thoraxState,
+    restPositions.shoulder_L,
+    restPositions.thorax,
+    hScale
+  );
   _wq.set(...clavL.worldQuaternion);
-  writeDqToUniform(17, _wq, clavL.worldPosition, clavL.restPosition, hScale, realArr, dualArr);
+  writeDqToUniform(CLAVICLE_L_BONE_INDEX, _wq, clavL.worldPosition, clavL.restPosition, hScale, realArr, dualArr);
 
-  const clavR = computeClavicleWorldState('R', pose, thoraxState, restPositions.shoulder_R);
+  const clavR = computeClavicleWorldState(
+    'R',
+    pose,
+    thoraxState,
+    restPositions.shoulder_R,
+    restPositions.thorax,
+    hScale
+  );
   _wq.set(...clavR.worldQuaternion);
-  writeDqToUniform(18, _wq, clavR.worldPosition, clavR.restPosition, hScale, realArr, dualArr);
+  writeDqToUniform(CLAVICLE_R_BONE_INDEX, _wq, clavR.worldPosition, clavR.restPosition, hScale, realArr, dualArr);
 }
 
 export function applyGpuDqsToMaterial(
@@ -92,6 +111,7 @@ export function applyGpuDqsToMaterial(
   material.onBeforeCompile = (shader) => {
     shader.uniforms.uBoneDqReal = uniforms.uBoneDqReal;
     shader.uniforms.uBoneDqDual = uniforms.uBoneDqDual;
+    shader.uniforms.uHeightScale = uniforms.uHeightScale;
 
     shader.vertexShader = shader.vertexShader
       .replace(
@@ -101,6 +121,7 @@ attribute vec2 aBoneIndex;
 attribute vec2 aBoneWeight;
 uniform vec4 uBoneDqReal[${MAX_DQS_BONES}];
 uniform vec4 uBoneDqDual[${MAX_DQS_BONES}];
+uniform float uHeightScale;
 
 vec3 dqRotateVec(vec4 q, vec3 v) {
   return v + 2.0 * cross(q.xyz, cross(q.xyz, v) + q.w * v);
@@ -140,7 +161,7 @@ objectNormal = dqRotateVec(dqsReal, objectNormal);
         '#include <begin_vertex>',
         `#include <begin_vertex>
 vec3 dqsTrans = 2.0 * (dqsReal.w * dqsDual.xyz - dqsDual.w * dqsReal.xyz + cross(dqsReal.xyz, dqsDual.xyz));
-transformed = dqRotateVec(dqsReal, transformed) + dqsTrans;
+transformed = dqRotateVec(dqsReal, transformed * uHeightScale) + dqsTrans;
 `
       );
   };

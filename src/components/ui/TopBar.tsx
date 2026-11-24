@@ -25,15 +25,7 @@ export function TopBar() {
   useEffect(() => {
     const decoded = decodeSimStateFromHash(window.location.hash);
     if (decoded) {
-      useSimStore.setState((s) => ({
-        ...s,
-        pose: decoded.pose,
-        forces: decoded.forces,
-        dynamicLoadFactor: decoded.dynamicLoadFactor ?? s.dynamicLoadFactor,
-        muscleEffectMode: decoded.muscleEffectMode ?? s.muscleEffectMode,
-        muscleStrainSubMode: decoded.muscleStrainSubMode ?? s.muscleStrainSubMode,
-        activePresetId: null,
-      }));
+      useSimStore.getState().hydrateSharedState(decoded);
     }
   }, []);
 

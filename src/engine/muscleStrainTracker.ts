@@ -1,6 +1,7 @@
 import { Color, Vector3, type BufferAttribute, type InterleavedBufferAttribute } from 'three';
 import { DEFAULT_HEIGHT_M } from '../data/skeletonConfig';
-import type { SkinnedMuscleData } from './muscleSkinning';
+import type { JointLoadResult } from '../types/biomechanics';
+import { evaluateSkinnedVertexFromTable, type SkinnedMuscleData } from './muscleSkinning';
 
 export interface MuscleStrainTracker {
   name: string;
@@ -219,6 +220,7 @@ export function createMuscleStrainTracker(m: SkinnedMuscleData): MuscleStrainTra
 // Pre-allocated scratch vectors for zero-GC per-frame strain calculation
 const _orig = new Vector3();
 const _ins = new Vector3();
+const _vTmp = new Vector3();
 
 /**
  * Computes current geometric strain = (L - L0) / L0 using zero-GC scratch vectors.
@@ -259,6 +261,67 @@ export function computeMuscleStrain(
   const L = _orig.distanceTo(_ins);
   const strain = (L - L0Scaled) / L0Scaled;
   return Number.isFinite(strain) ? strain : 0;
+}
+
+/**
+ * Anchor-only DQS strain evaluation (used when full-mesh skinning runs on GPU).
+ * Requires `buildJointDualQuaternions` to have been called for the current frame.
+ */
+export function computeMuscleStrainFromDqsTable(
+  tracker: MuscleStrainTracker,
+  skinned: SkinnedMuscleData,
+  heightM: number = DEFAULT_HEIGHT_M
+): number {
+  if (tracker.skip) return 0;
+  const hScale = heightM / DEFAULT_HEIGHT_M;
+  const L0Scaled = tracker.L0 * hScale;
+  if (!Number.isFinite(L0Scaled) || L0Scaled < 0.02) return 0;
+
+  const { originIndices, insertionIndices } = tracker;
+  const oLen = originIndices.length;
+  const iLen = insertionIndices.length;
+  if (oLen === 0 || iLen === 0) return 0;
+
+  _orig.set(0, 0, 0);
+  for (let j = 0; j < oLen; j++) {
+    evaluateSkinnedVertexFromTable(skinned, originIndices[j], hScale, _vTmp);
+    _orig.add(_vTmp);
+  }
+  _orig.divideScalar(oLen);
+
+  _ins.set(0, 0, 0);
+  for (let j = 0; j < iLen; j++) {
+    evaluateSkinnedVertexFromTable(skinned, insertionIndices[j], hScale, _vTmp);
+    _ins.add(_vTmp);
+  }
+  _ins.divideScalar(iLen);
+
+  const L = _orig.distanceTo(_ins);
+  const strain = (L - L0Scaled) / L0Scaled;
+  return Number.isFinite(strain) ? strain : 0;
+}
+
+/**
+ * Computes active muscle tension score combining geometric strain with joint biomechanical demand
+ * (used when muscleStrainSubMode === 'activeTension').
+ */
+export function computeActiveTensionScore(
+  geometricStrain: number,
+  jointLoad: JointLoadResult | undefined
+): number {
+  if (!jointLoad || !Number.isFinite(geometricStrain)) return 0;
+  const loadDemand = Math.min(
+    1.5,
+    jointLoad.bendingMomentNm / 55 + (jointLoad.axialForceN / 900) * 0.3
+  );
+  if (loadDemand < 0.06) return 0;
+  const engagement = 0.35 + 0.65 * Math.min(1, Math.abs(geometricStrain) / 0.15);
+  if (geometricStrain > 0.03) {
+    // Eccentric loading under tension (positive -> blue / magenta overload)
+    return 0.04 + loadDemand * engagement * 0.3;
+  }
+  // Concentric / isometric active contraction under load (negative -> amber / orange-red heat)
+  return -(0.04 + loadDemand * engagement * 0.26);
 }
 
 const COLOR_NEUTRAL = new Color('#5c3f3e');

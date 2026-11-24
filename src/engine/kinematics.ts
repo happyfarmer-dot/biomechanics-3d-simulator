@@ -90,10 +90,79 @@ export function eulerToAnatomical(jointId: JointId, euler: { x: number; y: numbe
   };
 }
 
+const _eulerZxy = new Euler(0, 0, 0, 'ZXY');
+
+function wrapRad(rad: number): number {
+  let r = rad;
+  while (r > Math.PI) r -= 2 * Math.PI;
+  while (r < -Math.PI) r += 2 * Math.PI;
+  return r;
+}
+
+/**
+ * Converts a local Quaternion back to anatomical angles (degrees) without ZXY gimbal-lock
+ * clamping at flexion = ±90°, selecting the Euler branch closest to `reference`.
+ */
+export function quaternionToAnatomicalContinuous(
+  jointId: JointId,
+  q: Quaternion,
+  reference: AnatomicalAngles
+): AnatomicalAngles {
+  _eulerZxy.setFromQuaternion(q, 'ZXY');
+  const ex = _eulerZxy.x;
+  const ey = _eulerZxy.y;
+  const ez = _eulerZxy.z;
+
+  const refEuler = anatomicalToEuler(jointId, reference);
+
+  // Near exact gimbal lock (|x| ≈ 90°), decouple z and y using reference.y
+  if (Math.abs(Math.cos(ex)) < 1e-3) {
+    const s = ex >= 0 ? 1 : -1;
+    const lockedY = refEuler.y;
+    const lockedZ = wrapRad(ez + s * ey - s * lockedY);
+    const lockCand = eulerToAnatomical(jointId, { x: ex, y: lockedY, z: lockedZ });
+    const lockAlt = eulerToAnatomical(jointId, {
+      x: s * Math.PI - ex,
+      y: lockedY,
+      z: lockedZ,
+    });
+    const d1 =
+      (lockCand.flexion - reference.flexion) ** 2 +
+      (lockCand.abduction - reference.abduction) ** 2 +
+      (lockCand.rotation - reference.rotation) ** 2;
+    const d2 =
+      (lockAlt.flexion - reference.flexion) ** 2 +
+      (lockAlt.abduction - reference.abduction) ** 2 +
+      (lockAlt.rotation - reference.rotation) ** 2;
+    return d2 < d1 ? lockAlt : lockCand;
+  }
+
+  const altY = wrapRad(ey + Math.PI);
+  const altZ = wrapRad(ez + Math.PI);
+  const candidates = [
+    eulerToAnatomical(jointId, { x: ex, y: ey, z: ez }),
+    eulerToAnatomical(jointId, { x: Math.PI - ex, y: altY, z: altZ }),
+    eulerToAnatomical(jointId, { x: -Math.PI - ex, y: altY, z: altZ }),
+  ];
+
+  let best = candidates[0];
+  let bestDistSq = Infinity;
+  for (const c of candidates) {
+    const df = c.flexion - reference.flexion;
+    const da = c.abduction - reference.abduction;
+    const dr = c.rotation - reference.rotation;
+    const distSq = df * df + da * da + dr * dr;
+    if (distSq < bestDistSq) {
+      bestDistSq = distSq;
+      best = c;
+    }
+  }
+  return best;
+}
+
 export function localEulerToQuaternion(localEuler: LocalEuler): Quaternion {
-  return new Quaternion().setFromEuler(
-    new Euler(localEuler.x, localEuler.y, localEuler.z, localEuler.order)
-  );
+  _eulerZxy.set(localEuler.x, localEuler.y, localEuler.z, localEuler.order);
+  return new Quaternion().setFromEuler(_eulerZxy);
 }
 
 export function computeKinematics(
@@ -105,8 +174,15 @@ export function computeKinematics(
   const scale = heightM / DEFAULT_HEIGHT_M;
 
   const pelvisAngles = pose.pelvis ?? { flexion: 0, abduction: 0, rotation: 0 };
+  const isProneOrSupine =
+    Math.abs(pelvisAngles.flexion) >= 60 || Math.abs(pelvisAngles.abduction) >= 60;
   const pelvisQuat = localEulerToQuaternion(anatomicalToEuler('pelvis', pelvisAngles));
   const pelvisInvQuat = pelvisQuat.clone().invert();
+
+  const getOffsetY = (id: JointId): number =>
+    calibratedOffsets?.[id]
+      ? calibratedOffsets[id][1] * scale
+      : SKELETON_CONFIG[id].offsetRatio[1] * heightM;
 
   for (const id of JOINT_ORDER) {
     const cfg = SKELETON_CONFIG[id];
@@ -130,10 +206,9 @@ export function computeKinematics(
     let worldQuat: Quaternion;
 
     if (cfg.parentId === null) {
-      // Pelvis: keephip/ankle grounded by adjusting pelvis vertical shift from hip pivot
       worldPos = localOffset;
       worldQuat = localQuat;
-    } else if (id === 'hip_L' || id === 'hip_R') {
+    } else if ((id === 'hip_L' || id === 'hip_R') && !isProneOrSupine) {
       // Closed-chain standing pelvis tilt: counter-rotate hip_L and hip_R by pelvisInvQuat
       // and keep hip world positions anchored so both legs stand upright on y = 0 floor.
       const parent = joints[cfg.parentId];
@@ -171,21 +246,49 @@ export function computeKinematics(
     };
   }
 
-  // Auto Grounding for upright poses (standing, squat, deadlift, lunge): keep feet on y = 0
-  const isProneOrSupine =
-    Math.abs(pose.pelvis.flexion) >= 60 || Math.abs(pose.pelvis.abduction) >= 60;
+  // Auto Grounding: shift = neutralLowestSupportY - currentLowestSupportY
+  // Guarantees exact 0.000 mm vertical drift in neutral standing while grounding standing, kneeling, and lying poses.
+  const neutralPelvisY = getOffsetY('pelvis');
+  const neutralAnkleLY =
+    neutralPelvisY + getOffsetY('hip_L') + getOffsetY('knee_L') + getOffsetY('ankle_L');
+  const neutralAnkleRY =
+    neutralPelvisY + getOffsetY('hip_R') + getOffsetY('knee_R') + getOffsetY('ankle_R');
+  const neutralMinAnkleY = Math.min(neutralAnkleLY, neutralAnkleRY);
+  const kneePad = 0.055 * scale;
+
+  let currentMinSupportY: number;
   if (!isProneOrSupine) {
-    const footSoleOffset = 0.075 * scale;
-    const minFootY = Math.min(
-      joints.ankle_L.worldPosition[1] - footSoleOffset,
-      joints.ankle_R.worldPosition[1] - footSoleOffset
+    currentMinSupportY = Math.min(
+      joints.ankle_L.worldPosition[1] - neutralMinAnkleY,
+      joints.ankle_R.worldPosition[1] - neutralMinAnkleY,
+      joints.knee_L.worldPosition[1] - kneePad,
+      joints.knee_R.worldPosition[1] - kneePad
     );
-    if (Math.abs(minFootY) > 1e-4) {
-      for (const id of JOINT_ORDER) {
-        joints[id].worldPosition[1] -= minFootY;
-        joints[id].distalWorldPosition[1] -= minFootY;
-        joints[id].comWorldPosition[1] -= minFootY;
-      }
+  } else {
+    currentMinSupportY = Math.min(
+      joints.ankle_L.worldPosition[1] - 0.06 * scale,
+      joints.ankle_R.worldPosition[1] - 0.06 * scale,
+      joints.knee_L.worldPosition[1] - kneePad,
+      joints.knee_R.worldPosition[1] - kneePad,
+      joints.pelvis.worldPosition[1] - 0.095 * scale,
+      joints.thorax.worldPosition[1] - 0.105 * scale,
+      joints.shoulder_L.worldPosition[1] - 0.065 * scale,
+      joints.shoulder_R.worldPosition[1] - 0.065 * scale,
+      joints.elbow_L.worldPosition[1] - 0.045 * scale,
+      joints.elbow_R.worldPosition[1] - 0.045 * scale,
+      joints.wrist_L.worldPosition[1] - 0.035 * scale,
+      joints.wrist_R.worldPosition[1] - 0.035 * scale,
+      joints.head.worldPosition[1] - 0.09 * scale
+    );
+  }
+
+  // Neutral standing has neutralLowestSupportY === 0, so shiftY = 0 - currentMinSupportY
+  const shiftY = -currentMinSupportY;
+  if (Math.abs(shiftY) > 1e-6) {
+    for (const id of JOINT_ORDER) {
+      joints[id].worldPosition[1] += shiftY;
+      joints[id].distalWorldPosition[1] += shiftY;
+      joints[id].comWorldPosition[1] += shiftY;
     }
   }
 
@@ -201,7 +304,9 @@ export function computeClavicleWorldState(
   side: 'L' | 'R',
   pose: PoseMap,
   thorax: JointWorldState,
-  shoulderRestPos: Vec3
+  shoulderRestPos: Vec3,
+  thoraxRestPos?: Vec3,
+  hScale: number = 1
 ): { worldPosition: Vec3; worldQuaternion: Quat; restPosition: Vec3 } {
   const shAngles = pose[`shoulder_${side}` as JointId];
   const excess = Math.max(0, Math.max(shAngles.abduction, shAngles.flexion) - 30);
@@ -209,18 +314,19 @@ export function computeClavicleWorldState(
   const sign = side === 'L' ? 1 : -1;
 
   const thoraxQuat = new Quaternion(...thorax.worldQuaternion);
-  const localQuat = new Quaternion().setFromEuler(
-    new Euler(0, -sign * clavDeg * 0.25 * DEG2RAD, sign * clavDeg * DEG2RAD, 'ZXY')
-  );
+  _eulerZxy.set(0, -sign * clavDeg * 0.25 * DEG2RAD, sign * clavDeg * DEG2RAD, 'ZXY');
+  const localQuat = new Quaternion().setFromEuler(_eulerZxy);
   const worldQuat = thoraxQuat.clone().multiply(localQuat);
 
   // Sternoclavicular pivot near medial clavicle
   const pivotRest: Vec3 = [sign * 0.025, shoulderRestPos[1] + 0.015, shoulderRestPos[2] + 0.02];
-  const thoraxRestY = 1.239;
+  const tRestX = thoraxRestPos ? thoraxRestPos[0] : 0;
+  const tRestY = thoraxRestPos ? thoraxRestPos[1] : 1.239;
+  const tRestZ = thoraxRestPos ? thoraxRestPos[2] : 0;
   const relFromThorax = new Vector3(
-    pivotRest[0],
-    pivotRest[1] - thoraxRestY,
-    pivotRest[2]
+    (pivotRest[0] - tRestX) * hScale,
+    (pivotRest[1] - tRestY) * hScale,
+    (pivotRest[2] - tRestZ) * hScale
   ).applyQuaternion(thoraxQuat);
   const worldPos: Vec3 = [
     thorax.worldPosition[0] + relFromThorax.x,

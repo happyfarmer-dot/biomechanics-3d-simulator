@@ -46,6 +46,12 @@ export function LayerToolbar() {
   const setMuscleEffectMode = useSimStore((s) => s.setMuscleEffectMode);
   const skinOpacity = useSimStore((s) => s.skinOpacity);
   const setSkinOpacity = useSimStore((s) => s.setSkinOpacity);
+  const dynamicLoadFactor = useSimStore((s) => s.dynamicLoadFactor);
+  const setDynamicLoadFactor = useSimStore((s) => s.setDynamicLoadFactor);
+  const sexProfile = useSimStore((s) => s.sexProfile);
+  const setSexProfile = useSimStore((s) => s.setSexProfile);
+  const romToleranceBoost = useSimStore((s) => s.romToleranceBoost);
+  const setRomToleranceBoost = useSimStore((s) => s.setRomToleranceBoost);
 
   useEffect(() => {
     if (!expanded) return;
@@ -93,7 +99,7 @@ export function LayerToolbar() {
       </button>
 
       {expanded && (
-        <div className="w-48 rounded-xl border border-slate-700/80 bg-slate-950/90 p-2.5 shadow-2xl backdrop-blur-md space-y-2.5">
+        <div className="w-52 max-h-[75vh] overflow-y-auto rounded-xl border border-slate-700/80 bg-slate-950/90 p-2.5 shadow-2xl backdrop-blur-md space-y-2.5">
           <div className="space-y-1">
             {LAYER_ITEMS.map(({ key, label, icon: Icon }) => {
               const active = layers[key];
@@ -180,6 +186,58 @@ export function LayerToolbar() {
                 checked={includeGravity}
                 onChange={(e) => setIncludeGravity(e.target.checked)}
                 className="h-3.5 w-3.5 accent-sky-500 cursor-pointer"
+              />
+            </label>
+
+            <div className="space-y-1">
+              <div className="flex items-center justify-between text-[10px] text-slate-300">
+                <span>動態衝擊係數 (DAF)</span>
+                <span className="font-mono text-amber-300">{dynamicLoadFactor.toFixed(1)}x</span>
+              </div>
+              <input
+                type="range"
+                data-testid="dynamic-load-factor-slider"
+                min={1.0}
+                max={3.0}
+                step={0.1}
+                value={dynamicLoadFactor}
+                onChange={(e) => setDynamicLoadFactor(Number(e.target.value))}
+                className="w-full h-1.5 accent-amber-400 cursor-pointer"
+              />
+            </div>
+
+            <div className="flex items-center justify-between text-[11px] text-slate-300">
+              <span>生物力學基準</span>
+              <div className="flex rounded-md border border-slate-700 bg-slate-900 p-0.5 text-[10px]">
+                <button
+                  type="button"
+                  onClick={() => setSexProfile('male')}
+                  className={`rounded px-1.5 py-0.5 cursor-pointer ${
+                    sexProfile === 'male' ? 'bg-sky-500/25 text-sky-200' : 'text-slate-400'
+                  }`}
+                >
+                  男
+                </button>
+                <button
+                  type="button"
+                  onClick={() => setSexProfile('female')}
+                  className={`rounded px-1.5 py-0.5 cursor-pointer ${
+                    sexProfile === 'female' ? 'bg-pink-500/25 text-pink-200' : 'text-slate-400'
+                  }`}
+                >
+                  女
+                </button>
+              </div>
+            </div>
+
+            <label className="flex items-center justify-between text-[11px] text-slate-300 cursor-pointer">
+              <span>柔軟度 ROM 寬容加成</span>
+              <input
+                type="checkbox"
+                data-testid="rom-tolerance-boost-toggle"
+                checked={romToleranceBoost}
+                onChange={(e) => setRomToleranceBoost(e.target.checked)}
+                className="h-3.5 w-3.5 accent-emerald-500 cursor-pointer"
               />
             </label>
 

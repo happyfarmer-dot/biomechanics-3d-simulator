@@ -1,7 +1,15 @@
 import { useGLTF } from '@react-three/drei';
 import { useFrame } from '@react-three/fiber';
 import { Component, Suspense, useEffect, useMemo, useRef, useState, type ReactNode } from 'react';
-import { Color, Mesh, MeshStandardMaterial, Vector3 } from 'three';
+import {
+  Color,
+  DoubleSide,
+  Mesh,
+  MeshPhysicalMaterial,
+  MeshStandardMaterial,
+  Quaternion,
+  Vector3,
+} from 'three';
 import {
   DEFAULT_HEIGHT_M,
   JOINT_ORDER,
@@ -9,16 +17,23 @@ import {
 } from '../../data/skeletonConfig';
 import { calibrateSkeletonFromScene } from '../../engine/calibrateSkeleton';
 import {
+  applyGpuDqsToMaterial,
+  createGpuDqsUniforms,
+  updateGpuDqsUniforms,
+} from '../../engine/gpuDqsShader';
+import { computeClavicleWorldState } from '../../engine/kinematics';
+import {
+  buildJointDualQuaternions,
   classifyMeshZone,
   findNearestBoneJointInZone,
   isMicroDebrisMesh,
   prepareAutoSkinnedMuscle,
-  updateSkinnedMuscleVertices,
   type SkinnedMuscleData,
 } from '../../engine/muscleSkinning';
 import {
   buildMuscleStrainSummary,
-  computeMuscleStrain,
+  computeActiveTensionScore,
+  computeMuscleStrainFromDqsTable,
   createMuscleStrainTracker,
   getStrainHeatmapVisual,
   type MuscleStrainTracker,
@@ -37,10 +52,67 @@ useGLTF.setDecoderPath(DRACO_PATH);
 
 const DEFAULT_GLB_URL = `${import.meta.env.BASE_URL}models/anatomy_rigged.glb`;
 
+const CLAVICLE_SCAPULA_KEYWORDS = ['clavicle', 'clavicula', 'scapula', 'acromion', 'coracoid'];
+
+const DEEP_INTERNAL_KEYWORDS = [
+  'intercostal',
+  'diaphragm',
+  'transversus',
+  'multifidus',
+  'rotatores',
+  'interspinal',
+  'intertransvers',
+  'obturator',
+  'gemellus',
+  'piriformis',
+  'popliteus',
+  'supinator',
+  'pronator_quadratus',
+  'subscapularis',
+  'pectoralis_minor',
+  'iliacus',
+  'psoas',
+  'quadratus_lumborum',
+  'scalene',
+  'longus_colli',
+  'longus_capitis',
+  'vastus_intermedius',
+  'ligament',
+  'capsule',
+  'tendon_sheath',
+  'bursa',
+  'membrane',
+  'fascia',
+  'cartilage',
+  'meniscus',
+  'disc',
+  'lumbrical',
+  'interosse',
+];
+
+function isSuperficialSkinMesh(name: string): boolean {
+  const nl = name.toLowerCase();
+  return !DEEP_INTERNAL_KEYWORDS.some((kw) => nl.includes(kw));
+}
+
+function isExtremityOrHeadBone(jointId: JointId): boolean {
+  return (
+    jointId === 'head' ||
+    jointId === 'wrist_L' ||
+    jointId === 'wrist_R' ||
+    jointId === 'ankle_L' ||
+    jointId === 'ankle_R'
+  );
+}
+
+const NOOP_RAYCAST = () => null;
+const UP_AXIS = new Vector3(0, 1, 0);
+
 interface BoneBinding {
   kind: 'bone' | 'skin';
   mesh: Mesh;
   jointId: JointId;
+  clavicleSide?: 'L' | 'R';
   localOffset: Vec3;
   modelScale: number;
 }
@@ -48,6 +120,7 @@ interface BoneBinding {
 interface MuscleBinding {
   name: string;
   jointId: JointId;
+  superficial: boolean;
   skinned: SkinnedMuscleData;
   tracker: MuscleStrainTracker;
   material: MeshStandardMaterial;
@@ -78,13 +151,16 @@ function RealAnatomyModel({
   onReady: (loaded: boolean) => void;
 }) {
   const { scene } = useGLTF(url);
+  const pose = useSimStore((s) => s.pose);
   const kinematics = useSimStore((s) => s.kinematics);
+  const loads = useSimStore((s) => s.loads);
   const heightM = useSimStore((s) => s.heightM);
   const layers = useSimStore((s) => s.layers);
   const focusedJointId = useSimStore((s) => s.focusedJointId);
   const jointRiskMap = useSimStore((s) => s.jointRiskMap);
   const interactionMode = useSimStore((s) => s.interactionMode);
   const muscleEffectMode = useSimStore((s) => s.muscleEffectMode);
+  const muscleStrainSubMode = useSimStore((s) => s.muscleStrainSubMode);
   const setModelStatus = useSimStore((s) => s.setModelStatus);
   const setCalibratedOffsets = useSimStore((s) => s.setCalibratedOffsets);
   const setIntegrityReport = useSimStore((s) => s.setIntegrityReport);
@@ -94,7 +170,37 @@ function RealAnatomyModel({
   const selectNearestJointAtPoint = useSimStore((s) => s.selectNearestJointAtPoint);
   const [pointerDownPos, setPointerDownPos] = useState<{ x: number; y: number } | null>(null);
 
-  // Step 0: Bake any negative mirror scale into geometry BEFORE calibration & deduplicate overlapping meshes
+  // Shared GPU DQS uniforms across all muscles & skin shell
+  const gpuDqsUniforms = useMemo(() => createGpuDqsUniforms(), []);
+
+  // Shared single MeshPhysicalMaterial instances for skin shell (eliminates 476 duplicate materials!)
+  const { skinShellMuscleMaterial, skinShellBoneMaterial } = useMemo(() => {
+    const commonOpts = {
+      color: '#ddb59b',
+      roughness: 0.65,
+      metalness: 0.0,
+      clearcoat: 0.12,
+      clearcoatRoughness: 0.55,
+      transparent: true,
+      opacity: 0.45,
+      depthWrite: false,
+      polygonOffset: true,
+      polygonOffsetFactor: -2,
+      polygonOffsetUnits: -2,
+      side: DoubleSide,
+    };
+    const muscleSkin = new MeshPhysicalMaterial(commonOpts);
+    applyGpuDqsToMaterial(muscleSkin, gpuDqsUniforms, 'dqs_skin_v1');
+    const boneSkin = new MeshPhysicalMaterial(commonOpts);
+    return { skinShellMuscleMaterial: muscleSkin, skinShellBoneMaterial: boneSkin };
+  }, [gpuDqsUniforms]);
+
+  useEffect(() => {
+    skinShellMuscleMaterial.opacity = skinOpacity;
+    skinShellBoneMaterial.opacity = skinOpacity;
+  }, [skinOpacity, skinShellMuscleMaterial, skinShellBoneMaterial]);
+
+  // Step 0: Bake any negative mirror scale into geometry BEFORE calibration
   useMemo(() => {
     scene.updateMatrixWorld(true);
     scene.traverse((obj) => {
@@ -129,7 +235,7 @@ function RealAnatomyModel({
     return () => setCalibratedOffsets(null);
   }, [calibration, setCalibratedOffsets]);
 
-  // Step 2: 100% Spatial Partitioning + Per-Vertex Auto-Skinning + Strain Tracker
+  // Step 2: 100% Spatial Partitioning + GPU DQS Muscle Preparation + Clavicle/Scapula Binding
   const { boneBindings, muscleBindings, unassignedMeshCount } = useMemo(() => {
     const bones: BoneBinding[] = [];
     const muscles: MuscleBinding[] = [];
@@ -150,9 +256,11 @@ function RealAnatomyModel({
         const skinned = prepareAutoSkinnedMuscle(obj, zone, calibration);
         const tracker = createMuscleStrainTracker(skinned);
         const material = createIndependentZAnatomyMuscleMaterial();
+        applyGpuDqsToMaterial(material, gpuDqsUniforms, 'dqs_muscle_v1');
         muscles.push({
           name: obj.name,
           jointId: skinned.primaryJoint,
+          superficial: isSuperficialSkinMesh(obj.name),
           skinned,
           tracker,
           material,
@@ -170,23 +278,36 @@ function RealAnatomyModel({
         const normY = (worldPos.y - minY) * s;
         const normZ = (worldPos.z - cz) * s;
 
-        const jRest = calibration.restPositions[jointId];
+        // Bind clavicle & scapula bones to scapulohumeral rhythm virtual nodes
+        const isClavicleOrScapula =
+          kind === 'bone' && CLAVICLE_SCAPULA_KEYWORDS.some((kw) => nl.includes(kw));
+        let clavicleSide: 'L' | 'R' | undefined;
+        let restAnchor: Vec3 = calibration.restPositions[jointId];
+
+        if (isClavicleOrScapula) {
+          clavicleSide = normX >= 0 ? 'L' : 'R';
+          const shRest = calibration.restPositions[`shoulder_${clavicleSide}` as JointId];
+          const sign = clavicleSide === 'L' ? 1 : -1;
+          restAnchor = [sign * 0.025, shRest[1] + 0.015, shRest[2] + 0.02];
+        }
+
         bones.push({
           kind,
           mesh: cloned,
           jointId,
-          localOffset: [normX - jRest[0], normY - jRest[1], normZ - jRest[2]],
+          clavicleSide,
+          localOffset: [normX - restAnchor[0], normY - restAnchor[1], normZ - restAnchor[2]],
           modelScale: s,
         });
       }
     });
 
     return { boneBindings: bones, muscleBindings: muscles, unassignedMeshCount: unassigned };
-  }, [scene, calibration]);
+  }, [scene, calibration, gpuDqsUniforms]);
 
   useEffect(() => {
     console.info(
-      `[Z-Anatomy] Loaded ${boneBindings.length} bones, ${muscleBindings.length} auto-skinned muscles, unassignedMeshCount === ${unassignedMeshCount}`
+      `[Z-Anatomy] Loaded ${boneBindings.length} bones, ${muscleBindings.length} GPU-DQS muscles, unassignedMeshCount === ${unassignedMeshCount}`
     );
     const ok = boneBindings.length > 0 || muscleBindings.length > 0;
     onReady(ok);
@@ -212,12 +333,33 @@ function RealAnatomyModel({
     setIntegrityReport,
   ]);
 
-  // Step 3: Update only muscles whose used joints changed via DQS, and compute per-muscle geometric strain
-  const prevJointSigRef = useMemo(() => new Map<number, string>(), []);
+  const hScale = heightM / DEFAULT_HEIGHT_M;
+
+  // Step 3: Update GPU DQS uniforms & compute anchor-only muscle strains (NO full-mesh CPU vertex overwrite!)
   const strainsRef = useRef<Float32Array>(new Float32Array(0));
   const stretchRatiosRef = useRef<Float32Array>(new Float32Array(0));
 
-  const { stretchRatios, strains } = useMemo(() => {
+  const { stretchRatios, strains, clavLState, clavRState } = useMemo(() => {
+    updateGpuDqsUniforms(gpuDqsUniforms, kinematics, calibration.restPositions, hScale, pose);
+    buildJointDualQuaternions(kinematics, calibration.restPositions, hScale, pose);
+
+    const clavL = computeClavicleWorldState(
+      'L',
+      pose,
+      kinematics.joints.thorax,
+      calibration.restPositions.shoulder_L,
+      calibration.restPositions.thorax,
+      hScale
+    );
+    const clavR = computeClavicleWorldState(
+      'R',
+      pose,
+      kinematics.joints.thorax,
+      calibration.restPositions.shoulder_R,
+      calibration.restPositions.thorax,
+      hScale
+    );
+
     if (strainsRef.current.length !== muscleBindings.length) {
       strainsRef.current = new Float32Array(muscleBindings.length);
       stretchRatiosRef.current = new Float32Array(muscleBindings.length).fill(1);
@@ -227,28 +369,32 @@ function RealAnatomyModel({
 
     for (let i = 0; i < muscleBindings.length; i++) {
       const m = muscleBindings[i];
-      let sig = `${heightM}`;
-      for (const jId of m.skinned.usedJoints) {
-        const j = kinematics.joints[jId];
-        sig += `|${j.worldPosition[0].toFixed(4)},${j.worldPosition[1].toFixed(4)},${j.worldQuaternion[0].toFixed(4)},${j.worldQuaternion[1].toFixed(4)},${j.worldQuaternion[2].toFixed(4)}`;
-      }
-      if (prevJointSigRef.get(i) !== sig) {
-        prevJointSigRef.set(i, sig);
-        ratios[i] = updateSkinnedMuscleVertices(
-          m.skinned,
-          kinematics,
-          heightM,
-          calibration.restPositions
-        );
-        curStrains[i] = computeMuscleStrain(
-          m.tracker,
-          m.skinned.geometry.getAttribute('position'),
-          heightM
-        );
-      }
+      curStrains[i] = computeMuscleStrainFromDqsTable(m.tracker, m.skinned, heightM);
+      const jO = kinematics.joints[m.skinned.primaryJoint];
+      const jI = kinematics.joints[m.skinned.secondaryJoint];
+      const curLen = Math.hypot(
+        jI.worldPosition[0] - jO.worldPosition[0],
+        jI.worldPosition[1] - jO.worldPosition[1],
+        jI.worldPosition[2] - jO.worldPosition[2]
+      );
+      ratios[i] = curLen / Math.max(m.skinned.restLength * hScale, 0.05);
     }
-    return { stretchRatios: ratios, strains: curStrains };
-  }, [muscleBindings, kinematics, heightM, calibration.restPositions, prevJointSigRef]);
+
+    return { stretchRatios: ratios, strains: curStrains, clavLState: clavL, clavRState: clavR };
+  }, [muscleBindings, kinematics, heightM, hScale, pose, calibration.restPositions, gpuDqsUniforms]);
+
+  // Display metric for heatmap (geometric strain vs active tension)
+  const displayMetrics = useMemo(() => {
+    const out = new Float32Array(muscleBindings.length);
+    for (let i = 0; i < muscleBindings.length; i++) {
+      const gStrain = strains[i] ?? 0;
+      out[i] =
+        muscleStrainSubMode === 'activeTension'
+          ? computeActiveTensionScore(gStrain, loads[muscleBindings[i].jointId])
+          : gStrain;
+    }
+    return out;
+  }, [muscleBindings, strains, muscleStrainSubMode, loads]);
 
   // Sync top contracting & stretching summary to store when heatmap mode is active
   useEffect(() => {
@@ -260,11 +406,11 @@ function RealAnatomyModel({
       entries.push({
         name: t.name,
         zhName: t.zhName,
-        strain: strains[i] ?? 0,
+        strain: displayMetrics[i] ?? 0,
       });
     }
     setMuscleStrainSummary(buildMuscleStrainSummary(entries));
-  }, [muscleEffectMode, muscleBindings, strains, kinematics, heightM, setMuscleStrainSummary]);
+  }, [muscleEffectMode, muscleBindings, displayMetrics, setMuscleStrainSummary]);
 
   const activeMacroSet = useMemo(() => {
     if (!focusedJointId) return null;
@@ -286,13 +432,60 @@ function RealAnatomyModel({
     const phase = clock.getElapsedTime() * 4.5;
     const pulse = 0.5 + 0.5 * Math.sin(phase);
     for (let i = 0; i < muscleBindings.length; i++) {
-      if ((strains[i] ?? 0) > 0.3) {
+      if ((displayMetrics[i] ?? 0) > 0.3) {
         muscleBindings[i].material.emissiveIntensity = 0.45 + 0.18 * pulse;
       }
     }
   });
 
-  const hScale = heightM / DEFAULT_HEIGHT_M;
+  // Lightweight proxy colliders along each bone segment so clicking/applying force works accurately with GPU DQS
+  const proxySegments = useMemo(() => {
+    const start = new Vector3();
+    const end = new Vector3();
+    const dir = new Vector3();
+    const mid = new Vector3();
+    const quat = new Quaternion();
+
+    return JOINT_ORDER.map((jId) => {
+      const j = kinematics.joints[jId];
+      start.set(...j.worldPosition);
+      end.set(...j.distalWorldPosition);
+      dir.subVectors(end, start);
+      const len = Math.max(dir.length(), 0.05);
+      mid.addVectors(start, end).multiplyScalar(0.5);
+      if (dir.lengthSq() > 1e-6) {
+        quat.setFromUnitVectors(UP_AXIS, dir.normalize());
+      } else {
+        quat.identity();
+      }
+      const radius = Math.max(0.028, SKELETON_CONFIG[jId].boneRadius * 1.45 * hScale);
+      return {
+        jointId: jId,
+        position: [mid.x, mid.y, mid.z] as Vec3,
+        quaternion: [quat.x, quat.y, quat.z, quat.w] as [number, number, number, number],
+        length: len,
+        radius,
+      };
+    });
+  }, [kinematics, hScale]);
+
+  const handleSurfaceClick = (
+    jointId: JointId,
+    e: { stopPropagation: () => void; point: Vector3; nativeEvent: MouseEvent }
+  ) => {
+    if (
+      pointerDownPos &&
+      Math.hypot(e.nativeEvent.clientX - pointerDownPos.x, e.nativeEvent.clientY - pointerDownPos.y) >= 6
+    ) {
+      return;
+    }
+    e.stopPropagation();
+    if (interactionMode === 'force') {
+      placeForceAtPoint(jointId, [e.point.x, e.point.y, e.point.z]);
+    } else {
+      selectNearestJointAtPoint([e.point.x, e.point.y, e.point.z]);
+    }
+  };
 
   return (
     <group
@@ -301,12 +494,17 @@ function RealAnatomyModel({
         setPointerDownPos({ x: e.nativeEvent.clientX, y: e.nativeEvent.clientY });
       }}
     >
-      {/* Bones attached to calibrated joints */}
+      {/* Bones attached to calibrated joints (clavicle/scapula driven by scapulohumeral rhythm) */}
       {boneBindings.map((b, idx) => {
         if (b.kind === 'skin' && !layers.skin) return null;
         if (b.kind === 'bone' && !layers.skeleton) return null;
 
+        const clavState =
+          b.clavicleSide === 'L' ? clavLState : b.clavicleSide === 'R' ? clavRState : null;
         const j = kinematics.joints[b.jointId];
+        const worldPosition = clavState ? clavState.worldPosition : j.worldPosition;
+        const worldQuaternion = clavState ? clavState.worldQuaternion : j.worldQuaternion;
+
         const isGhosted = Boolean(activeMacroSet && !activeMacroSet.has(b.jointId));
         const material =
           b.kind === 'skin'
@@ -316,8 +514,8 @@ function RealAnatomyModel({
         return (
           <group
             key={`bone_${b.mesh.name}_${idx}`}
-            position={j.worldPosition}
-            quaternion={j.worldQuaternion}
+            position={worldPosition}
+            quaternion={worldQuaternion}
           >
             <primitive
               object={b.mesh}
@@ -329,26 +527,15 @@ function RealAnatomyModel({
               scale={[b.modelScale * hScale, b.modelScale * hScale, b.modelScale * hScale]}
               material={material}
               castShadow={!isGhosted && b.kind !== 'skin'}
-              onClick={(e: { stopPropagation: () => void; point: Vector3; nativeEvent: MouseEvent }) => {
-                if (
-                  pointerDownPos &&
-                  Math.hypot(e.nativeEvent.clientX - pointerDownPos.x, e.nativeEvent.clientY - pointerDownPos.y) >= 6
-                ) {
-                  return;
-                }
-                e.stopPropagation();
-                if (interactionMode === 'force') {
-                  placeForceAtPoint(b.jointId, [e.point.x, e.point.y, e.point.z]);
-                } else {
-                  selectNearestJointAtPoint([e.point.x, e.point.y, e.point.z]);
-                }
-              }}
+              onClick={(e: { stopPropagation: () => void; point: Vector3; nativeEvent: MouseEvent }) =>
+                handleSurfaceClick(b.jointId, e)
+              }
             />
           </group>
         );
       })}
 
-      {/* Dual-Bone Skinned Muscles in world space */}
+      {/* GPU Dual-Quaternion Skinned Muscles */}
       {layers.muscles &&
         muscleBindings.map((m, idx) => {
           const isGhosted = Boolean(
@@ -372,8 +559,8 @@ function RealAnatomyModel({
           mat.depthWrite = !isTransparent;
 
           if (muscleEffectMode === 'strain') {
-            const strain = strains[idx] ?? 0;
-            const vis = getStrainHeatmapVisual(strain, tmpColor, tmpEmissive, 0);
+            const metric = displayMetrics[idx] ?? 0;
+            const vis = getStrainHeatmapVisual(metric, tmpColor, tmpEmissive, 0);
             mat.color.copy(vis.color);
             mat.emissive.copy(vis.emissive);
             mat.emissiveIntensity = vis.emissiveIntensity;
@@ -403,55 +590,76 @@ function RealAnatomyModel({
               geometry={m.skinned.geometry}
               material={mat}
               frustumCulled={false}
+              raycast={NOOP_RAYCAST}
               visible
-              onClick={(e) => {
-                if (
-                  pointerDownPos &&
-                  Math.hypot(e.nativeEvent.clientX - pointerDownPos.x, e.nativeEvent.clientY - pointerDownPos.y) >= 6
-                ) {
-                  return;
-                }
-                e.stopPropagation();
-                if (interactionMode === 'force') {
-                  placeForceAtPoint(m.jointId, [e.point.x, e.point.y, e.point.z]);
-                } else {
-                  selectNearestJointAtPoint([e.point.x, e.point.y, e.point.z]);
-                }
-              }}
             />
           );
         })}
 
-      {/* Smooth Anatomical Skin Shell (shared DQS skinning, natural #ddb59b translucent skin) */}
-      {layers.skin &&
-        muscleBindings.map((m, idx) => {
-          const isGhosted = Boolean(
-            activeMacroSet &&
-              m.skinned.usedJoints.every((jid) => !activeMacroSet.has(jid))
-          );
-          if (isGhosted) return null;
-          return (
-            <mesh
-              key={`skin_shell_${m.name}_${idx}`}
-              geometry={m.skinned.geometry}
-              frustumCulled={false}
-            >
-              <meshPhysicalMaterial
-                color="#ddb59b"
-                roughness={0.65}
-                metalness={0.0}
-                clearcoat={0.12}
-                clearcoatRoughness={0.55}
-                transparent
-                opacity={skinOpacity}
-                depthWrite={false}
-                polygonOffset
-                polygonOffsetFactor={-2}
-                polygonOffsetUnits={-2}
+      {/* Lightweight Proxy Colliders for accurate click-to-select & click-to-apply-force under GPU DQS */}
+      {proxySegments.map((seg) => (
+        <mesh
+          key={`proxy_${seg.jointId}`}
+          position={seg.position}
+          quaternion={seg.quaternion}
+          onClick={(e) => handleSurfaceClick(seg.jointId, e)}
+        >
+          <capsuleGeometry args={[seg.radius, Math.max(0.01, seg.length - seg.radius), 4, 8]} />
+          <meshBasicMaterial transparent opacity={0} depthWrite={false} colorWrite={false} />
+        </mesh>
+      ))}
+
+      {/* Smooth Anatomical Skin Shell: single shared GPU-DQS material on superficial muscles + skull/hands/feet */}
+      {layers.skin && (
+        <>
+          {muscleBindings.map((m, idx) => {
+            if (!m.superficial) return null;
+            const isGhosted = Boolean(
+              activeMacroSet &&
+                m.skinned.usedJoints.every((jid) => !activeMacroSet.has(jid))
+            );
+            if (isGhosted) return null;
+            return (
+              <mesh
+                key={`skin_shell_${m.name}_${idx}`}
+                geometry={m.skinned.geometry}
+                material={skinShellMuscleMaterial}
+                frustumCulled={false}
+                raycast={NOOP_RAYCAST}
               />
-            </mesh>
-          );
-        })}
+            );
+          })}
+          {boneBindings.map((b, idx) => {
+            if (b.kind !== 'bone' || !isExtremityOrHeadBone(b.jointId)) return null;
+            const isGhosted = Boolean(activeMacroSet && !activeMacroSet.has(b.jointId));
+            if (isGhosted) return null;
+            const j = kinematics.joints[b.jointId];
+            return (
+              <group
+                key={`skin_bone_${b.mesh.name}_${idx}`}
+                position={j.worldPosition}
+                quaternion={j.worldQuaternion}
+              >
+                <mesh
+                  geometry={b.mesh.geometry}
+                  material={skinShellBoneMaterial}
+                  position={[
+                    b.localOffset[0] * hScale,
+                    b.localOffset[1] * hScale,
+                    b.localOffset[2] * hScale,
+                  ]}
+                  scale={[
+                    b.modelScale * hScale * 1.018,
+                    b.modelScale * hScale * 1.018,
+                    b.modelScale * hScale * 1.018,
+                  ]}
+                  raycast={NOOP_RAYCAST}
+                />
+              </group>
+            );
+          })}
+        </>
+      )}
     </group>
   );
 }
