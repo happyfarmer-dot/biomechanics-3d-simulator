@@ -14,8 +14,8 @@ import { useSimStore } from '../../store/useSimStore';
 import { decodeSimStateFromHash, encodeSimStateToHash } from '../../utils/urlState';
 
 describe('Flagship Upgrade Suite', () => {
-  it('loads all 54 preset poses with zero NaN in kinematics', () => {
-    expect(PRESET_POSES.length).toBeGreaterThanOrEqual(54);
+  it('loads all 64 preset poses with zero NaN in kinematics', () => {
+    expect(PRESET_POSES.length).toBeGreaterThanOrEqual(64);
     for (const preset of PRESET_POSES) {
       const kin = computeKinematics(preset.pose, 1.75);
       for (const jId of JOINT_ORDER) {
@@ -90,9 +90,9 @@ describe('Flagship Upgrade Suite', () => {
     useSimStore.getState().resetPose();
   });
 
-  it('interpolates all 6 action trajectories via SLERP without gimbal lock > 90 deg or ±180 deg jumps', () => {
+  it('interpolates all 63 non-neutral action trajectories via SLERP without gimbal lock > 90 deg or ±180 deg jumps', () => {
     const keys = Object.keys(ACTION_TRAJECTORIES);
-    expect(keys.length).toBe(6);
+    expect(keys.length).toBe(63);
     for (const k of keys) {
       const traj = ACTION_TRAJECTORIES[k];
       for (const t of [0, 0.25, 0.5, 0.75, 1.0]) {
@@ -137,6 +137,22 @@ describe('Flagship Upgrade Suite', () => {
       });
       expect(loads.lumbar.bendingMomentNm).toBeGreaterThan(5);
     }
+
+    // side_plank: right elbow/forearm supports on floor below pelvis
+    const sidePlank = PRESET_POSES.find((p) => p.id === 'side_plank')!;
+    const sideKin = computeKinematics(sidePlank.pose, 1.75);
+    expect(sideKin.joints.elbow_R.worldPosition[1]).toBeLessThan(0.12);
+    expect(sideKin.joints.pelvis.worldPosition[1]).toBeGreaterThan(
+      sideKin.joints.elbow_R.worldPosition[1] + 0.25
+    );
+
+    // glute_bridge_peak: head/shoulders rest low on floor while pelvis is bridged upward
+    const bridge = PRESET_POSES.find((p) => p.id === 'glute_bridge_peak')!;
+    const bridgeKin = computeKinematics(bridge.pose, 1.75);
+    expect(bridgeKin.joints.head.worldPosition[1]).toBeLessThan(0.15);
+    expect(bridgeKin.joints.pelvis.worldPosition[1]).toBeGreaterThan(
+      bridgeKin.joints.head.worldPosition[1] + 0.15
+    );
   });
 
   it('verifies corrected external/internal rotation signs, shoulder ROM limits, and bench press leg orientation', () => {
