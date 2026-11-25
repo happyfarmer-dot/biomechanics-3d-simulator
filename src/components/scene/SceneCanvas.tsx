@@ -3,6 +3,7 @@ import { Canvas } from '@react-three/fiber';
 import { useRef, useState } from 'react';
 import { useSimStore } from '../../store/useSimStore';
 import { CameraRig } from './CameraRig';
+import { ExercisePropsOverlay } from './ExercisePropsOverlay';
 import { GlbAnatomyLoader } from './GlbAnatomyLoader';
 import { HumanRig } from './HumanRig';
 import { MomentArmOverlay } from './MomentArmOverlay';
@@ -120,6 +121,7 @@ export function SceneCanvas() {
 
         <GlbAnatomyLoader onExternalActive={setExternalGlbActive} />
         <HumanRig hideProceduralBones={externalGlbActive} />
+        <ExercisePropsOverlay />
         <MomentArmOverlay />
         {!externalGlbActive && <MuscleMeshes />}
 

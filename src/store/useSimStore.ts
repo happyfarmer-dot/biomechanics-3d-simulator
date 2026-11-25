@@ -57,6 +57,8 @@ interface SimState {
   skinOpacity: number;
   muscleStrainSummary: MuscleStrainSummary;
   activePresetId: string | null;
+  trajectoryBasePose: PoseMap | null;
+  trajectoryJointOffsets: Partial<Record<JointId, AnatomicalAngles>>;
   modelStatus: { state: 'loading' | 'loaded' | 'error'; message?: string };
   calibratedOffsets: Record<JointId, Vec3> | null;
   integrityReport: RigIntegrityReport | null;
@@ -94,6 +96,7 @@ interface SimState {
   placeForceAtPoint: (targetJoint: JointId, worldPoint: Vec3) => void;
   setForceVector: (id: string, vec: Vec3) => void;
   setPose: (pose: PoseMap, preservePreset?: boolean) => void;
+  setTrajectoryPose: (basePose: PoseMap) => void;
   hydrateSharedState: (payload: {
     pose: PoseMap;
     forces: SpatialForce[];
@@ -191,6 +194,8 @@ export const useSimStore = create<SimState>((set, get) => ({
   skinOpacity: 0.45,
   muscleStrainSummary: { topContracting: [], topStretching: [] },
   activePresetId: 'neutral_standing',
+  trajectoryBasePose: null,
+  trajectoryJointOffsets: {},
   modelStatus: { state: 'loading' },
   calibratedOffsets: null,
   integrityReport: null,
@@ -370,7 +375,25 @@ export const useSimStore = create<SimState>((set, get) => ({
       s.sexProfile,
       s.romToleranceBoost
     );
-    set({ pose: nextPose, activePresetId: null, ...derived });
+
+    if (s.activePresetId && s.trajectoryBasePose) {
+      const base = s.trajectoryBasePose[jointId];
+      const nextOffsets = {
+        ...s.trajectoryJointOffsets,
+        [jointId]: {
+          flexion: nextAngles.flexion - base.flexion,
+          abduction: nextAngles.abduction - base.abduction,
+          rotation: nextAngles.rotation - base.rotation,
+        },
+      };
+      set({
+        pose: nextPose,
+        trajectoryJointOffsets: nextOffsets,
+        ...derived,
+      });
+    } else {
+      set({ pose: nextPose, activePresetId: null, ...derived });
+    }
   },
 
   applyPosePatch: (patch) => {
@@ -389,7 +412,28 @@ export const useSimStore = create<SimState>((set, get) => ({
       s.sexProfile,
       s.romToleranceBoost
     );
-    set({ pose: nextPose, activePresetId: null, ...derived });
+
+    if (s.activePresetId && s.trajectoryBasePose) {
+      const nextOffsets = { ...s.trajectoryJointOffsets };
+      for (const jId of Object.keys(patch) as JointId[]) {
+        const nextVal = nextPose[jId];
+        const base = s.trajectoryBasePose[jId];
+        if (nextVal && base) {
+          nextOffsets[jId] = {
+            flexion: nextVal.flexion - base.flexion,
+            abduction: nextVal.abduction - base.abduction,
+            rotation: nextVal.rotation - base.rotation,
+          };
+        }
+      }
+      set({
+        pose: nextPose,
+        trajectoryJointOffsets: nextOffsets,
+        ...derived,
+      });
+    } else {
+      set({ pose: nextPose, activePresetId: null, ...derived });
+    }
   },
 
   placeForceAtPoint: (targetJoint, worldPoint) => {
@@ -486,6 +530,50 @@ export const useSimStore = create<SimState>((set, get) => ({
     set({
       pose,
       activePresetId: preservePreset ? s.activePresetId : null,
+      trajectoryBasePose: preservePreset ? pose : null,
+      trajectoryJointOffsets: preservePreset ? s.trajectoryJointOffsets : {},
+      ...derived,
+    });
+  },
+
+  setTrajectoryPose: (basePose) => {
+    const s = get();
+    const offsets = s.trajectoryJointOffsets;
+    const hasOffsets = Object.keys(offsets).length > 0;
+    const finalPose: PoseMap = hasOffsets ? { ...basePose } : basePose;
+
+    if (hasOffsets) {
+      const clampVal = (v: number, [min, max]: [number, number]) =>
+        Math.max(min, Math.min(max, v));
+      for (const jId of Object.keys(offsets) as JointId[]) {
+        const off = offsets[jId];
+        const base = basePose[jId];
+        if (!off || !base) continue;
+        const limits = getJointSliderLimits(jId);
+        finalPose[jId] = {
+          flexion: clampVal(base.flexion + off.flexion, limits.flexion),
+          abduction: clampVal(base.abduction + off.abduction, limits.abduction),
+          rotation: clampVal(base.rotation + off.rotation, limits.rotation),
+        };
+      }
+    }
+
+    const derived = evaluateAll(
+      finalPose,
+      s.forces,
+      s.heightM,
+      s.bodyMassKg,
+      s.includeGravity,
+      s.focusedJointId,
+      s.selectedJoint,
+      s.calibratedOffsets,
+      s.dynamicLoadFactor,
+      s.sexProfile,
+      s.romToleranceBoost
+    );
+    set({
+      pose: finalPose,
+      trajectoryBasePose: basePose,
       ...derived,
     });
   },
@@ -520,6 +608,8 @@ export const useSimStore = create<SimState>((set, get) => ({
       muscleStrainSubMode: nextSubMode,
       selectedForceId: nextSelectedForce,
       activePresetId: null,
+      trajectoryBasePose: null,
+      trajectoryJointOffsets: {},
       ...derived,
     });
   },
@@ -557,6 +647,8 @@ export const useSimStore = create<SimState>((set, get) => ({
       interactionMode: nextMode,
       selectedForceId: nextSelectedForce,
       activePresetId: presetId,
+      trajectoryBasePose: clonedPose,
+      trajectoryJointOffsets: {},
       ...derived,
     });
   },

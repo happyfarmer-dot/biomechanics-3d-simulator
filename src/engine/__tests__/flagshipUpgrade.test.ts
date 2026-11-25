@@ -265,4 +265,28 @@ describe('Flagship Upgrade Suite', () => {
     expect(baseRomAlerts.some((a) => a.id === 'rom_critical_hip_R_flexion')).toBe(true);
     expect(boostedRomAlerts.some((a) => a.id === 'rom_critical_hip_R_flexion')).toBe(false);
   });
+
+  it('preserves activePresetId and layers user limb adjustments live during trajectory playback', () => {
+    const store = useSimStore.getState();
+    store.applyPreset('barbell_squat_bottom');
+    expect(useSimStore.getState().activePresetId).toBe('barbell_squat_bottom');
+
+    const traj = ACTION_TRAJECTORIES.barbell_squat_bottom.keyframes;
+    const midPose = interpolatePoseSlerp(traj, 0.5);
+    useSimStore.getState().setTrajectoryPose(midPose);
+    const baseLumbar = useSimStore.getState().pose.lumbar.flexion;
+
+    // User adjusts lumbar flexion by +15 deg while animation is playing
+    useSimStore.getState().setJointAngles('lumbar', { flexion: baseLumbar + 15 });
+    expect(useSimStore.getState().activePresetId).toBe('barbell_squat_bottom');
+    expect(useSimStore.getState().pose.lumbar.flexion).toBeCloseTo(baseLumbar + 15, 2);
+
+    // Subsequent trajectory frame preserves the +15 deg user offset on top of the new frame
+    const nextPose = interpolatePoseSlerp(traj, 0.8);
+    useSimStore.getState().setTrajectoryPose(nextPose);
+    expect(useSimStore.getState().activePresetId).toBe('barbell_squat_bottom');
+    expect(useSimStore.getState().pose.lumbar.flexion).toBeCloseTo(nextPose.lumbar.flexion + 15, 2);
+
+    useSimStore.getState().resetPose();
+  });
 });

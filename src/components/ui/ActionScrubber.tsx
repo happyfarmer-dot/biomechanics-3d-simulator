@@ -37,7 +37,7 @@ export function ActionScrubber() {
       progressRef.current = next;
       setProgress(next);
       const pose = interpolatePoseSlerp(trajectory.keyframes, next);
-      useSimStore.getState().setPose(pose, true);
+      useSimStore.getState().setTrajectoryPose(pose);
       rafId = requestAnimationFrame(tick);
     };
     rafId = requestAnimationFrame(tick);
@@ -87,7 +87,7 @@ export function ActionScrubber() {
             dirRef.current = t >= 1 ? -1 : 1;
             setProgress(t);
             const pose = interpolatePoseSlerp(trajectory.keyframes, t);
-            useSimStore.getState().setPose(pose, true);
+            useSimStore.getState().setTrajectoryPose(pose);
           }}
           className="h-1.5 w-full accent-sky-400 cursor-pointer"
         />
