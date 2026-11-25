@@ -54,8 +54,8 @@ export const PRESET_POSES: PresetPose[] = [
       neck: { flexion: -20, abduction: 0, rotation: -10 },
       shoulder_L: { flexion: 48, abduction: 10, rotation: 0 },
       shoulder_R: { flexion: 48, abduction: 10, rotation: 0 },
-      elbow_L: { flexion: 25, abduction: 0, rotation: 0 },
-      elbow_R: { flexion: 25, abduction: 0, rotation: 0 },
+      elbow_L: { flexion: 25, abduction: 0, rotation: -165 },
+      elbow_R: { flexion: 25, abduction: 0, rotation: -165 },
       hip_L: { flexion: 25, abduction: 5, rotation: 0 },
       hip_R: { flexion: 25, abduction: 5, rotation: 0 },
       knee_L: { flexion: 15, abduction: 0, rotation: 0 },
@@ -92,8 +92,10 @@ export const PRESET_POSES: PresetPose[] = [
     pose: withOverrides({
       shoulder_L: { flexion: 10, abduction: 105, rotation: 55 },
       shoulder_R: { flexion: 10, abduction: 105, rotation: 55 },
-      elbow_L: { flexion: 75, abduction: 0, rotation: 0 },
-      elbow_R: { flexion: 75, abduction: 0, rotation: 0 },
+      elbow_L: { flexion: 75, abduction: 0, rotation: -145 },
+      elbow_R: { flexion: 75, abduction: 0, rotation: -145 },
+      wrist_L: { flexion: -15, abduction: 0, rotation: 0 },
+      wrist_R: { flexion: -15, abduction: 0, rotation: 0 },
       lumbar: { flexion: -8, abduction: 0, rotation: 0 },
     }),
     forces: [

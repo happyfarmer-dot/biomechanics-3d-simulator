@@ -293,6 +293,18 @@ export function ExercisePropsOverlay() {
   const { j } = propsConfig;
   const wL = j.wrist_L.worldPosition;
   const wR = j.wrist_R.worldPosition;
+  const dL = j.wrist_L.distalWorldPosition;
+  const dR = j.wrist_R.distalWorldPosition;
+  const gL: [number, number, number] = [
+    wL[0] + (dL[0] - wL[0]) * 0.45,
+    wL[1] + (dL[1] - wL[1]) * 0.45,
+    wL[2] + (dL[2] - wL[2]) * 0.45,
+  ];
+  const gR: [number, number, number] = [
+    wR[0] + (dR[0] - wR[0]) * 0.45,
+    wR[1] + (dR[1] - wR[1]) * 0.45,
+    wR[2] + (dR[2] - wR[2]) * 0.45,
+  ];
   const eL = j.elbow_L.worldPosition;
   const eR = j.elbow_R.worldPosition;
   const shL = j.shoulder_L.worldPosition;
@@ -326,7 +338,7 @@ export function ExercisePropsOverlay() {
 
       {/* 手持槓鈴 */}
       {propsConfig.showHandBarbell && (
-        <TranslucentBarbell leftPos={wL} rightPos={wR} />
+        <TranslucentBarbell leftPos={gL} rightPos={gR} />
       )}
 
       {/* 背蹲 / 提踵 槓鈴（架於上背肩峰後方） */}
@@ -356,20 +368,20 @@ export function ExercisePropsOverlay() {
       {/* 雙手啞鈴 */}
       {propsConfig.showBothDumbbells && (
         <>
-          <TranslucentDumbbell wristPos={wL} elbowPos={eL} />
-          <TranslucentDumbbell wristPos={wR} elbowPos={eR} />
+          <TranslucentDumbbell wristPos={gL} elbowPos={eL} />
+          <TranslucentDumbbell wristPos={gR} elbowPos={eR} />
         </>
       )}
 
       {/* 單手啞鈴 */}
       {propsConfig.showRightDumbbell && (
-        <TranslucentDumbbell wristPos={wR} elbowPos={eR} />
+        <TranslucentDumbbell wristPos={gR} elbowPos={eR} />
       )}
 
       {/* 引體向上單槓 */}
       {propsConfig.showPullupBar && (
         <mesh
-          position={[0, (wL[1] + wR[1]) * 0.5 + 0.03, (wL[2] + wR[2]) * 0.5]}
+          position={[0, (gL[1] + gR[1]) * 0.5 + 0.03, (gL[2] + gR[2]) * 0.5]}
           rotation={[0, 0, Math.PI / 2]}
           raycast={NOOP_RAYCAST}
         >
@@ -381,7 +393,7 @@ export function ExercisePropsOverlay() {
       {/* 雙槓臂屈伸平行槓 */}
       {propsConfig.showDipBars && (
         <>
-          {[wL, wR].map((w, i) => (
+          {[gL, gR].map((w, i) => (
             <group key={i}>
               <mesh position={[w[0], w[1] - 0.02, w[2]]} rotation={[Math.PI / 2, 0, 0]} raycast={NOOP_RAYCAST}>
                 <cylinderGeometry args={[0.02, 0.02, 0.9, 12]} />
@@ -400,15 +412,15 @@ export function ExercisePropsOverlay() {
       {propsConfig.showCablePulldown && (
         <group>
           <mesh
-            position={[(wL[0] + wR[0]) * 0.5, (wL[1] + wR[1]) * 0.5, (wL[2] + wR[2]) * 0.5]}
+            position={[(gL[0] + gR[0]) * 0.5, (gL[1] + gR[1]) * 0.5, (gL[2] + gR[2]) * 0.5]}
             rotation={[0, 0, Math.PI / 2]}
             raycast={NOOP_RAYCAST}
           >
-            <cylinderGeometry args={[0.014, 0.014, Math.max(0.35, Math.hypot(wL[0] - wR[0], wL[1] - wR[1]) + 0.16), 10]} />
+            <cylinderGeometry args={[0.014, 0.014, Math.max(0.35, Math.hypot(gL[0] - gR[0], gL[1] - gR[1]) + 0.16), 10]} />
             <meshStandardMaterial color="#94a3b8" transparent opacity={0.32} depthWrite={false} />
           </mesh>
           <mesh
-            position={[(wL[0] + wR[0]) * 0.5, (wL[1] + wR[1]) * 0.5 + 0.45, (wL[2] + wR[2]) * 0.5]}
+            position={[(gL[0] + gR[0]) * 0.5, (gL[1] + gR[1]) * 0.5 + 0.45, (gL[2] + gR[2]) * 0.5]}
             raycast={NOOP_RAYCAST}
           >
             <cylinderGeometry args={[0.006, 0.006, 0.9, 8]} />
@@ -421,7 +433,7 @@ export function ExercisePropsOverlay() {
       {propsConfig.showCableHorizontal && (
         <group>
           <mesh
-            position={[(wL[0] + wR[0]) * 0.5, (wL[1] + wR[1]) * 0.5, (wL[2] + wR[2]) * 0.5 + 0.55]}
+            position={[(gL[0] + gR[0]) * 0.5, (gL[1] + gR[1]) * 0.5, (gL[2] + gR[2]) * 0.5 + 0.55]}
             rotation={[Math.PI / 2, 0, 0]}
             raycast={NOOP_RAYCAST}
           >

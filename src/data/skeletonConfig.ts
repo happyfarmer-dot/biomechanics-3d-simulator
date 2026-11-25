@@ -110,7 +110,7 @@ export const SKELETON_CONFIG: Record<JointId, JointConfig> = {
     massRatio: 0.0187,
     comRatio: 0.43,
     boneRadius: 0.022,
-    romLimits: { flexion: [0, 145], abduction: [-10, 10], rotation: [-85, 85] },
+    romLimits: { flexion: [0, 145], abduction: [-10, 10], rotation: [-175, 15] },
   },
   wrist_L: {
     id: 'wrist_L',
@@ -145,7 +145,7 @@ export const SKELETON_CONFIG: Record<JointId, JointConfig> = {
     massRatio: 0.0187,
     comRatio: 0.43,
     boneRadius: 0.022,
-    romLimits: { flexion: [0, 145], abduction: [-10, 10], rotation: [-85, 85] },
+    romLimits: { flexion: [0, 145], abduction: [-10, 10], rotation: [-175, 15] },
   },
   wrist_R: {
     id: 'wrist_R',
@@ -268,7 +268,7 @@ export function getJointSliderLimits(jointId: JointId): {
     return { flexion: [-45, 135], abduction: [-45, 75], rotation: [-55, 55] };
   }
   if (jointId.startsWith('elbow_')) {
-    return { flexion: [-10, 155], abduction: [-30, 30], rotation: [-95, 95] };
+    return { flexion: [-10, 155], abduction: [-30, 30], rotation: [-180, 20] };
   }
   if (jointId.startsWith('wrist_')) {
     return { flexion: [-85, 85], abduction: [-45, 55], rotation: [-35, 35] };

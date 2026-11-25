@@ -103,7 +103,7 @@ describe('Flagship Upgrade Suite', () => {
           expect(Number.isFinite(pose[jId].rotation)).toBe(true);
           // No ±180° gimbal-lock wrap jumps on abduction/rotation
           expect(Math.abs(pose[jId].abduction)).toBeLessThan(155);
-          expect(Math.abs(pose[jId].rotation)).toBeLessThan(155);
+          expect(Math.abs(pose[jId].rotation)).toBeLessThan(178);
         }
       }
     }
