@@ -408,40 +408,61 @@ export function ExercisePropsOverlay() {
         </>
       )}
 
-      {/* 滑輪下拉 / 三頭下壓 握把與垂直纜繩 */}
-      {propsConfig.showCablePulldown && (
-        <group>
-          <mesh
-            position={[(gL[0] + gR[0]) * 0.5, (gL[1] + gR[1]) * 0.5, (gL[2] + gR[2]) * 0.5]}
-            rotation={[0, 0, Math.PI / 2]}
-            raycast={NOOP_RAYCAST}
-          >
-            <cylinderGeometry args={[0.014, 0.014, Math.max(0.35, Math.hypot(gL[0] - gR[0], gL[1] - gR[1]) + 0.16), 10]} />
-            <meshStandardMaterial color="#94a3b8" transparent opacity={0.32} depthWrite={false} />
-          </mesh>
-          <mesh
-            position={[(gL[0] + gR[0]) * 0.5, (gL[1] + gR[1]) * 0.5 + 0.45, (gL[2] + gR[2]) * 0.5]}
-            raycast={NOOP_RAYCAST}
-          >
-            <cylinderGeometry args={[0.006, 0.006, 0.9, 8]} />
-            <meshStandardMaterial color="#38bdf8" transparent opacity={0.26} depthWrite={false} />
-          </mesh>
-        </group>
-      )}
+      {/* 滑輪下拉 / 三頭下壓 握把與固定滑輪纜繩 */}
+      {propsConfig.showCablePulldown && (() => {
+        const gMid: Vec3 = [(gL[0] + gR[0]) * 0.5, (gL[1] + gR[1]) * 0.5, (gL[2] + gR[2]) * 0.5];
+        const pulleyAnchor: Vec3 = [
+          0,
+          activePresetId === 'tricep_rope_pushdown_lockout' ? 1.85 : 2.28,
+          activePresetId === 'tricep_rope_pushdown_lockout' ? 0.34 : 0.22,
+        ];
+        const barSeg = computeSegmentTransform(gL, gR);
+        const cableSeg = computeSegmentTransform(gMid, pulleyAnchor);
+        return (
+          <group>
+            <mesh position={barSeg.position} quaternion={barSeg.quaternion} raycast={NOOP_RAYCAST}>
+              <cylinderGeometry args={[0.014, 0.014, Math.max(0.35, barSeg.length + 0.16), 10]} />
+              <meshStandardMaterial color="#94a3b8" transparent opacity={0.32} depthWrite={false} />
+            </mesh>
+            <mesh position={cableSeg.position} quaternion={cableSeg.quaternion} raycast={NOOP_RAYCAST}>
+              <cylinderGeometry args={[0.006, 0.006, Math.max(0.05, cableSeg.length), 8]} />
+              <meshStandardMaterial color="#38bdf8" transparent opacity={0.28} depthWrite={false} />
+            </mesh>
+            <mesh position={pulleyAnchor} rotation={[0, 0, Math.PI / 2]} raycast={NOOP_RAYCAST}>
+              <cylinderGeometry args={[0.045, 0.045, 0.03, 14]} />
+              <meshStandardMaterial color="#64748b" transparent opacity={0.32} depthWrite={false} />
+            </mesh>
+          </group>
+        );
+      })()}
 
-      {/* 坐姿划船 / 臉拉 水平纜繩 */}
-      {propsConfig.showCableHorizontal && (
-        <group>
-          <mesh
-            position={[(gL[0] + gR[0]) * 0.5, (gL[1] + gR[1]) * 0.5, (gL[2] + gR[2]) * 0.5 + 0.55]}
-            rotation={[Math.PI / 2, 0, 0]}
-            raycast={NOOP_RAYCAST}
-          >
-            <cylinderGeometry args={[0.007, 0.007, 1.1, 8]} />
-            <meshStandardMaterial color="#38bdf8" transparent opacity={0.26} depthWrite={false} />
-          </mesh>
-        </group>
-      )}
+      {/* 坐姿划船 / 臉拉 固定前滑輪纜繩 */}
+      {propsConfig.showCableHorizontal && (() => {
+        const gMid: Vec3 = [(gL[0] + gR[0]) * 0.5, (gL[1] + gR[1]) * 0.5, (gL[2] + gR[2]) * 0.5];
+        const pulleyAnchor: Vec3 = [
+          0,
+          activePresetId === 'cable_face_pull_peak' ? 1.55 : 0.42,
+          1.28,
+        ];
+        const barSeg = computeSegmentTransform(gL, gR);
+        const cableSeg = computeSegmentTransform(gMid, pulleyAnchor);
+        return (
+          <group>
+            <mesh position={barSeg.position} quaternion={barSeg.quaternion} raycast={NOOP_RAYCAST}>
+              <cylinderGeometry args={[0.014, 0.014, Math.max(0.24, barSeg.length + 0.08), 10]} />
+              <meshStandardMaterial color="#94a3b8" transparent opacity={0.32} depthWrite={false} />
+            </mesh>
+            <mesh position={cableSeg.position} quaternion={cableSeg.quaternion} raycast={NOOP_RAYCAST}>
+              <cylinderGeometry args={[0.007, 0.007, Math.max(0.05, cableSeg.length), 8]} />
+              <meshStandardMaterial color="#38bdf8" transparent opacity={0.28} depthWrite={false} />
+            </mesh>
+            <mesh position={pulleyAnchor} rotation={[0, 0, Math.PI / 2]} raycast={NOOP_RAYCAST}>
+              <cylinderGeometry args={[0.045, 0.045, 0.03, 14]} />
+              <meshStandardMaterial color="#64748b" transparent opacity={0.32} depthWrite={false} />
+            </mesh>
+          </group>
+        );
+      })()}
     </group>
   );
 }

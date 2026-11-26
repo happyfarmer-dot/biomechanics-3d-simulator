@@ -175,10 +175,51 @@ export function localEulerToQuaternion(localEuler: LocalEuler): Quaternion {
   return new Quaternion().setFromEuler(_eulerZxy);
 }
 
+const NON_FOOT_ANCHORED_PRESETS = new Set([
+  'superman_back_extension',
+  'freestyle_swim_catch',
+  'childs_pose',
+  'russian_twist',
+  'flat_bench_press_bottom',
+  'dumbbell_chest_fly_bottom',
+]);
+
+const MID_FOOT_CENTERED_PRESETS = new Set([
+  'farmers_walk',
+  'sprint_drive_phase',
+]);
+
+const PLANTED_LEFT_FOOT_PRESETS = new Set([
+  'bulgarian_split_squat_bottom',
+  'soccer_kick_windup',
+  'kneeling_hip_flexor_stretch',
+  'warrior_two',
+]);
+
+const PLANTED_RIGHT_FOOT_PRESETS = new Set([
+  'single_leg_rdl_balance',
+  'baseball_pitch_cocking',
+  'boxing_right_cross',
+  'tennis_forehand_swing',
+  'golf_downswing_impact',
+  'forward_lunge_bottom',
+]);
+
+const APPARATUS_HAND_ANCHORS: Record<string, [number, number, number]> = {
+  pull_up_peak: [0, 2.18, 0.14],
+  parallel_bar_dip_bottom: [0, 1.25, 0.08],
+};
+
+const FLOOR_HAND_XZ_ANCHORS: Record<string, [number, number]> = {
+  push_up_bottom: [0, 0.5],
+  cobra_pose: [0, 0.5],
+};
+
 export function computeKinematics(
   pose: PoseMap,
   heightM: number = DEFAULT_HEIGHT_M,
-  calibratedOffsets?: Record<JointId, Vec3> | null
+  calibratedOffsets?: Record<JointId, Vec3> | null,
+  activePresetId?: string | null
 ): KinematicsResult {
   const joints = {} as Record<JointId, JointWorldState>;
   const scale = heightM / DEFAULT_HEIGHT_M;
@@ -189,10 +230,11 @@ export function computeKinematics(
   const pelvisQuat = localEulerToQuaternion(anatomicalToEuler('pelvis', pelvisAngles));
   const pelvisInvQuat = pelvisQuat.clone().invert();
 
-  const getOffsetY = (id: JointId): number =>
+  const getOffsetAxis = (id: JointId, axis: 0 | 1 | 2): number =>
     calibratedOffsets?.[id]
-      ? calibratedOffsets[id][1] * scale
-      : SKELETON_CONFIG[id].offsetRatio[1] * heightM;
+      ? calibratedOffsets[id][axis] * scale
+      : SKELETON_CONFIG[id].offsetRatio[axis] * heightM;
+  const getOffsetY = (id: JointId): number => getOffsetAxis(id, 1);
 
   for (const id of JOINT_ORDER) {
     const cfg = SKELETON_CONFIG[id];
@@ -300,15 +342,87 @@ export function computeKinematics(
     );
   }
 
+  const shiftAll = (dx: number, dy: number, dz: number) => {
+    if (Math.abs(dx) <= 1e-6 && Math.abs(dy) <= 1e-6 && Math.abs(dz) <= 1e-6) return;
+    for (const id of JOINT_ORDER) {
+      joints[id].worldPosition[0] += dx;
+      joints[id].worldPosition[1] += dy;
+      joints[id].worldPosition[2] += dz;
+      joints[id].distalWorldPosition[0] += dx;
+      joints[id].distalWorldPosition[1] += dy;
+      joints[id].distalWorldPosition[2] += dz;
+      joints[id].comWorldPosition[0] += dx;
+      joints[id].comWorldPosition[1] += dy;
+      joints[id].comWorldPosition[2] += dz;
+    }
+  };
+
+  const getGripPoint = (side: 'L' | 'R'): Vec3 => {
+    const j = joints[side === 'L' ? 'wrist_L' : 'wrist_R'];
+    return [
+      j.worldPosition[0] + (j.distalWorldPosition[0] - j.worldPosition[0]) * 0.45,
+      j.worldPosition[1] + (j.distalWorldPosition[1] - j.worldPosition[1]) * 0.45,
+      j.worldPosition[2] + (j.distalWorldPosition[2] - j.worldPosition[2]) * 0.45,
+    ];
+  };
+
+  const appAnchor = activePresetId ? APPARATUS_HAND_ANCHORS[activePresetId] : undefined;
+  if (appAnchor) {
+    const gL = getGripPoint('L');
+    const gR = getGripPoint('R');
+    const gMidX = (gL[0] + gR[0]) * 0.5;
+    const gMidY = (gL[1] + gR[1]) * 0.5;
+    const gMidZ = (gL[2] + gR[2]) * 0.5;
+    shiftAll(appAnchor[0] * scale - gMidX, appAnchor[1] * scale - gMidY, appAnchor[2] * scale - gMidZ);
+    return { joints };
+  }
+
   // Neutral standing has neutralLowestSupportY === 0, so shiftY = 0 - currentMinSupportY
   const shiftY = -currentMinSupportY;
-  if (Math.abs(shiftY) > 1e-6) {
-    for (const id of JOINT_ORDER) {
-      joints[id].worldPosition[1] += shiftY;
-      joints[id].distalWorldPosition[1] += shiftY;
-      joints[id].comWorldPosition[1] += shiftY;
+  let shiftX = 0;
+  let shiftZ = 0;
+
+  const neutralPelvisZ = getOffsetAxis('pelvis', 2);
+  const neutralAnkleLZ =
+    neutralPelvisZ + getOffsetAxis('hip_L', 2) + getOffsetAxis('knee_L', 2) + getOffsetAxis('ankle_L', 2);
+  const neutralAnkleRZ =
+    neutralPelvisZ + getOffsetAxis('hip_R', 2) + getOffsetAxis('knee_R', 2) + getOffsetAxis('ankle_R', 2);
+  const neutralAnkleZ = (neutralAnkleLZ + neutralAnkleRZ) * 0.5;
+
+  const floorHandXZ = activePresetId ? FLOOR_HAND_XZ_ANCHORS[activePresetId] : undefined;
+  if (floorHandXZ) {
+    const gL = getGripPoint('L');
+    const gR = getGripPoint('R');
+    shiftX = floorHandXZ[0] * scale - (gL[0] + gR[0]) * 0.5;
+    shiftZ = floorHandXZ[1] * scale - (gL[2] + gR[2]) * 0.5;
+  } else if (activePresetId === 'standard_plank') {
+    shiftX = -(joints.elbow_L.worldPosition[0] + joints.elbow_R.worldPosition[0]) * 0.5;
+    shiftZ = 0.42 * scale - (joints.elbow_L.worldPosition[2] + joints.elbow_R.worldPosition[2]) * 0.5;
+  } else if (activePresetId === 'side_plank') {
+    shiftX = -joints.elbow_R.worldPosition[0];
+    shiftZ = -joints.elbow_R.worldPosition[2];
+  } else if (activePresetId === 'glute_bridge_peak' || activePresetId === 'barbell_hip_thrust_peak') {
+    shiftX = -(joints.ankle_L.worldPosition[0] + joints.ankle_R.worldPosition[0]) * 0.5;
+    shiftZ = 0.42 * scale - (joints.ankle_L.worldPosition[2] + joints.ankle_R.worldPosition[2]) * 0.5;
+  } else if (!isProneOrSupine && (!activePresetId || !NON_FOOT_ANCHORED_PRESETS.has(activePresetId))) {
+    const aL = joints.ankle_L.worldPosition;
+    const aR = joints.ankle_R.worldPosition;
+    let plantedZ: number;
+    if (activePresetId && PLANTED_LEFT_FOOT_PRESETS.has(activePresetId)) {
+      plantedZ = aL[2];
+    } else if (activePresetId && PLANTED_RIGHT_FOOT_PRESETS.has(activePresetId)) {
+      plantedZ = aR[2];
+    } else if (activePresetId && MID_FOOT_CENTERED_PRESETS.has(activePresetId)) {
+      plantedZ = (aL[2] + aR[2]) * 0.5;
+    } else if (Math.abs(aL[1] - aR[1]) > 0.04 * scale) {
+      plantedZ = aL[1] <= aR[1] ? aL[2] : aR[2];
+    } else {
+      plantedZ = (aL[2] + aR[2]) * 0.5;
     }
+    shiftZ = neutralAnkleZ - plantedZ;
   }
+
+  shiftAll(shiftX, shiftY, shiftZ);
 
   return { joints };
 }

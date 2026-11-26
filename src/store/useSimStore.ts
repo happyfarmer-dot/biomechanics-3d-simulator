@@ -127,9 +127,10 @@ function evaluateAll(
   calibratedOffsets: Record<JointId, Vec3> | null,
   dynamicLoadFactor: number = 1.0,
   sexProfile: 'male' | 'female' = 'male',
-  romToleranceBoost: boolean = false
+  romToleranceBoost: boolean = false,
+  activePresetId: string | null = null
 ) {
-  const kinematics = computeKinematics(pose, heightM, calibratedOffsets);
+  const kinematics = computeKinematics(pose, heightM, calibratedOffsets, activePresetId);
   const muscles = evaluateMuscles(kinematics, heightM);
   const loads = computeStatics(kinematics, forces, {
     includeGravity,
@@ -161,7 +162,8 @@ const initialDerived = evaluateAll(
   null,
   1.0,
   'male',
-  false
+  false,
+  'neutral_standing'
 );
 
 export const useSimStore = create<SimState>((set, get) => ({
@@ -227,7 +229,8 @@ export const useSimStore = create<SimState>((set, get) => ({
       s.calibratedOffsets,
       dynamicLoadFactor,
       s.sexProfile,
-      s.romToleranceBoost
+      s.romToleranceBoost,
+      s.activePresetId
     );
     set({ dynamicLoadFactor, ...derived });
   },
@@ -244,7 +247,8 @@ export const useSimStore = create<SimState>((set, get) => ({
       s.calibratedOffsets,
       s.dynamicLoadFactor,
       sexProfile,
-      s.romToleranceBoost
+      s.romToleranceBoost,
+      s.activePresetId
     );
     set({ sexProfile, ...derived });
   },
@@ -261,7 +265,8 @@ export const useSimStore = create<SimState>((set, get) => ({
       s.calibratedOffsets,
       s.dynamicLoadFactor,
       s.sexProfile,
-      romToleranceBoost
+      romToleranceBoost,
+      s.activePresetId
     );
     set({ romToleranceBoost, ...derived });
   },
@@ -314,7 +319,8 @@ export const useSimStore = create<SimState>((set, get) => ({
       calibratedOffsets,
       s.dynamicLoadFactor,
       s.sexProfile,
-      s.romToleranceBoost
+      s.romToleranceBoost,
+      s.activePresetId
     );
     set({ calibratedOffsets, ...derived });
   },
@@ -373,7 +379,8 @@ export const useSimStore = create<SimState>((set, get) => ({
       s.calibratedOffsets,
       s.dynamicLoadFactor,
       s.sexProfile,
-      s.romToleranceBoost
+      s.romToleranceBoost,
+      s.activePresetId
     );
 
     if (s.activePresetId && s.trajectoryBasePose) {
@@ -410,7 +417,8 @@ export const useSimStore = create<SimState>((set, get) => ({
       s.calibratedOffsets,
       s.dynamicLoadFactor,
       s.sexProfile,
-      s.romToleranceBoost
+      s.romToleranceBoost,
+      s.activePresetId
     );
 
     if (s.activePresetId && s.trajectoryBasePose) {
@@ -514,6 +522,7 @@ export const useSimStore = create<SimState>((set, get) => ({
 
   setPose: (pose, preservePreset = false) => {
     const s = get();
+    const nextPresetId = preservePreset ? s.activePresetId : null;
     const derived = evaluateAll(
       pose,
       s.forces,
@@ -525,11 +534,12 @@ export const useSimStore = create<SimState>((set, get) => ({
       s.calibratedOffsets,
       s.dynamicLoadFactor,
       s.sexProfile,
-      s.romToleranceBoost
+      s.romToleranceBoost,
+      nextPresetId
     );
     set({
       pose,
-      activePresetId: preservePreset ? s.activePresetId : null,
+      activePresetId: nextPresetId,
       trajectoryBasePose: preservePreset ? pose : null,
       trajectoryJointOffsets: preservePreset ? s.trajectoryJointOffsets : {},
       ...derived,
@@ -569,7 +579,8 @@ export const useSimStore = create<SimState>((set, get) => ({
       s.calibratedOffsets,
       s.dynamicLoadFactor,
       s.sexProfile,
-      s.romToleranceBoost
+      s.romToleranceBoost,
+      s.activePresetId
     );
     set({
       pose: finalPose,
@@ -617,6 +628,7 @@ export const useSimStore = create<SimState>((set, get) => ({
   applyPreset: (presetId) => {
     const preset = PRESET_POSES.find((p) => p.id === presetId);
     if (!preset) return;
+
     const s = get();
     const clonedPose = structuredClone(preset.pose);
     const clonedForces = structuredClone(preset.forces);
@@ -636,7 +648,8 @@ export const useSimStore = create<SimState>((set, get) => ({
       s.calibratedOffsets,
       s.dynamicLoadFactor,
       s.sexProfile,
-      s.romToleranceBoost
+      s.romToleranceBoost,
+      presetId
     );
     set({
       pose: clonedPose,
@@ -672,7 +685,8 @@ export const useSimStore = create<SimState>((set, get) => ({
       s.calibratedOffsets,
       s.dynamicLoadFactor,
       s.sexProfile,
-      s.romToleranceBoost
+      s.romToleranceBoost,
+      s.activePresetId
     );
     set({ heightM: clampedH, bodyMassKg: clampedM, ...derived });
   },
@@ -690,7 +704,8 @@ export const useSimStore = create<SimState>((set, get) => ({
       s.calibratedOffsets,
       s.dynamicLoadFactor,
       s.sexProfile,
-      s.romToleranceBoost
+      s.romToleranceBoost,
+      s.activePresetId
     );
     set({ includeGravity, ...derived });
   },

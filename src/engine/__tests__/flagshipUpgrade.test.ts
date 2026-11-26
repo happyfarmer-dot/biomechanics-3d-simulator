@@ -7,6 +7,11 @@ import {
   computeMomentArmGeometry,
 } from '../../components/scene/MomentArmOverlay';
 import { computeClavicleWorldState, computeKinematics } from '../kinematics';
+import {
+  computeHandPhalanxTransforms,
+  getPresetHandGripModes,
+  type HandSkeletonRestMap,
+} from '../handGripPose';
 import { computeActiveTensionScore } from '../muscleStrainTracker';
 import { evaluateAllInjuries } from '../romEvaluator';
 import { computeStatics } from '../staticsEngine';
@@ -288,5 +293,90 @@ describe('Flagship Upgrade Suite', () => {
     expect(useSimStore.getState().pose.lumbar.flexion).toBeCloseTo(nextPose.lumbar.flexion + 15, 2);
 
     useSimStore.getState().resetPose();
+  });
+
+  it('keeps planted feet fixed on floor and fixed apparatus grips stationary across dynamic actions', () => {
+    const getGripPoints = (pose: ReturnType<typeof createNeutralPose>, id: string) => {
+      const k = computeKinematics(pose, 1.75, null, id);
+      const wL = k.joints.wrist_L.worldPosition;
+      const dL = k.joints.wrist_L.distalWorldPosition;
+      const wR = k.joints.wrist_R.worldPosition;
+      const dR = k.joints.wrist_R.distalWorldPosition;
+      const gL = [wL[0] + (dL[0] - wL[0]) * 0.45, wL[1] + (dL[1] - wL[1]) * 0.45, wL[2] + (dL[2] - wL[2]) * 0.45];
+      const gR = [wR[0] + (dR[0] - wR[0]) * 0.45, wR[1] + (dR[1] - wR[1]) * 0.45, wR[2] + (dR[2] - wR[2]) * 0.45];
+      return {
+        k,
+        gMid: [(gL[0] + gR[0]) * 0.5, (gL[1] + gR[1]) * 0.5, (gL[2] + gR[2]) * 0.5],
+        gw: Math.hypot(gL[0] - gR[0], gL[1] - gR[1], gL[2] - gR[2]),
+      };
+    };
+
+    const span = (arr: number[]) => Math.max(...arr) - Math.min(...arr);
+    const sampleT = [0, 0.25, 0.5, 0.75, 1];
+
+    // Standing exercises: planted ankle Z drift < 0.01m
+    for (const id of ['sumo_deadlift_start', 'romanian_deadlift', 'barbell_squat_bottom', 'wide_grip_lat_pulldown']) {
+      const traj = ACTION_TRAJECTORIES[id].keyframes;
+      const aLZ = sampleT.map((t) => computeKinematics(interpolatePoseSlerp(traj, t), 1.75, null, id).joints.ankle_L.worldPosition[2]);
+      expect(span(aLZ)).toBeLessThan(0.01);
+    }
+
+    // Pull-up & Dip bars: grip midpoint and grip width remain stationary while body moves
+    for (const id of ['pull_up_peak', 'parallel_bar_dip_bottom']) {
+      const traj = ACTION_TRAJECTORIES[id].keyframes;
+      const samples = sampleT.map((t) => getGripPoints(interpolatePoseSlerp(traj, t), id));
+      expect(span(samples.map((s) => s.gMid[1]))).toBeLessThan(0.005);
+      expect(span(samples.map((s) => s.gMid[2]))).toBeLessThan(0.005);
+      expect(span(samples.map((s) => s.gw))).toBeLessThan(0.03);
+    }
+
+    // Bilateral fixed-grip barbells & cables maintain constant grip width (< 0.04m)
+    for (const id of ['flat_bench_press_bottom', 'wide_grip_lat_pulldown', 'bent_over_barbell_row', 'standing_overhead_press', 'seated_cable_row_peak']) {
+      const traj = ACTION_TRAJECTORIES[id].keyframes;
+      const gws = sampleT.map((t) => getGripPoints(interpolatePoseSlerp(traj, t), id).gw);
+      expect(span(gws)).toBeLessThan(0.04);
+    }
+  });
+
+  it('curls finger phalanges around bars/fists in grip poses while keeping open-hand poses uncurled', () => {
+    const restMap: HandSkeletonRestMap = {
+      L: {
+        first: { metacarpal: [0.03, -0.05, 0.01], proximal: [0.05, -0.08, 0.03], distal: [0.06, -0.10, 0.04] },
+        second: { metacarpal: [0.02, -0.08, 0.00], proximal: [0.03, -0.13, 0.02], middle: [0.04, -0.15, 0.03], distal: [0.045, -0.165, 0.05] },
+      },
+      R: {
+        first: { metacarpal: [-0.03, -0.05, 0.01], proximal: [-0.05, -0.08, 0.03], distal: [-0.06, -0.10, 0.04] },
+        second: { metacarpal: [-0.02, -0.08, 0.00], proximal: [-0.03, -0.13, 0.02], middle: [-0.04, -0.15, 0.03], distal: [-0.045, -0.165, 0.05] },
+      },
+    };
+
+    expect(getPresetHandGripModes('sumo_deadlift_start')).toEqual({ L: 'bar', R: 'bar' });
+    expect(getPresetHandGripModes('single_arm_dumbbell_row')).toEqual({ L: 'open', R: 'bar' });
+    expect(getPresetHandGripModes('push_up_bottom')).toEqual({ L: 'open', R: 'open' });
+
+    const barTransforms = computeHandPhalanxTransforms(restMap, getPresetHandGripModes('flat_bench_press_bottom'));
+    expect(barTransforms.R_second_distal).toBeDefined();
+    expect(barTransforms.R_first_distal).toBeDefined();
+    // Distal fingertip curls upward (+Y relative to extended -0.165) toward palm center
+    expect(barTransforms.R_second_distal!.localOffset[1]).toBeGreaterThan(-0.14);
+
+    const openTransforms = computeHandPhalanxTransforms(restMap, getPresetHandGripModes('neutral_standing'));
+    expect(Object.keys(openTransforms)).toHaveLength(0);
+  });
+
+  it('suppresses false standing pelvic tilt alerts during neutral-spine hip hinges while keeping hyperlordotic pelvic tilt active', () => {
+    for (const id of ['sumo_deadlift_start', 'romanian_deadlift']) {
+      const p = PRESET_POSES.find((x) => x.id === id)!;
+      const kin = computeKinematics(p.pose, 1.75, null, id);
+      const loads = computeStatics(kin, p.forces, { includeGravity: p.includeGravity, bodyMassKg: 70, heightM: 1.75 });
+      const alerts = evaluateAllInjuries(p.pose, loads);
+      expect(alerts.some((a) => a.id.startsWith('composite_pelvic_tilt_lumbar_hip_stress'))).toBe(false);
+    }
+
+    const apt = PRESET_POSES.find((x) => x.id === 'anterior_pelvic_tilt_standing')!;
+    const aptKin = computeKinematics(apt.pose, 1.75, null, apt.id);
+    const aptLoads = computeStatics(aptKin, apt.forces, { includeGravity: apt.includeGravity, bodyMassKg: 70, heightM: 1.75 });
+    const aptAlerts = evaluateAllInjuries(apt.pose, aptLoads);
+    expect(aptAlerts.some((a) => a.id.startsWith('composite_pelvic_tilt_lumbar_hip_stress'))).toBe(true);
   });
 });

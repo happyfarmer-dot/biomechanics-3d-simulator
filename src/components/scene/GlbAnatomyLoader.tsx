@@ -23,6 +23,12 @@ import {
 } from '../../engine/gpuDqsShader';
 import { computeClavicleWorldState } from '../../engine/kinematics';
 import {
+  computeHandPhalanxTransforms,
+  getPresetHandGripModes,
+  parseHandBoneTag,
+  type HandSkeletonRestMap,
+} from '../../engine/handGripPose';
+import {
   buildJointDualQuaternions,
   classifyMeshZone,
   findNearestBoneJointInZone,
@@ -107,12 +113,14 @@ function isExtremityOrHeadBone(jointId: JointId): boolean {
 
 const NOOP_RAYCAST = () => null;
 const UP_AXIS = new Vector3(0, 1, 0);
+const IDENTITY_QUAT: [number, number, number, number] = [0, 0, 0, 1];
 
 interface BoneBinding {
   kind: 'bone' | 'skin';
   mesh: Mesh;
   jointId: JointId;
   clavicleSide?: 'L' | 'R';
+  handKey?: string;
   localOffset: Vec3;
   modelScale: number;
 }
@@ -152,6 +160,7 @@ function RealAnatomyModel({
 }) {
   const { scene } = useGLTF(url);
   const pose = useSimStore((s) => s.pose);
+  const activePresetId = useSimStore((s) => s.activePresetId);
   const kinematics = useSimStore((s) => s.kinematics);
   const loads = useSimStore((s) => s.loads);
   const heightM = useSimStore((s) => s.heightM);
@@ -236,9 +245,10 @@ function RealAnatomyModel({
   }, [calibration, setCalibratedOffsets]);
 
   // Step 2: 100% Spatial Partitioning + GPU DQS Muscle Preparation + Clavicle/Scapula Binding
-  const { boneBindings, muscleBindings, unassignedMeshCount } = useMemo(() => {
+  const { boneBindings, muscleBindings, unassignedMeshCount, handRestMap } = useMemo(() => {
     const bones: BoneBinding[] = [];
     const muscles: MuscleBinding[] = [];
+    const handMap: HandSkeletonRestMap = { L: {}, R: {} };
     const [cx, minY, cz] = calibration.centerOffset;
     const s = calibration.modelScale;
     let unassigned = 0;
@@ -291,19 +301,49 @@ function RealAnatomyModel({
           restAnchor = [sign * 0.025, shRest[1] + 0.015, shRest[2] + 0.02];
         }
 
+        const localOffset: Vec3 = [
+          normX - restAnchor[0],
+          normY - restAnchor[1],
+          normZ - restAnchor[2],
+        ];
+
+        let handKey: string | undefined;
+        if (kind === 'bone') {
+          const handTag = parseHandBoneTag(obj.name);
+          if (handTag) {
+            const sideEntry = handMap[handTag.side];
+            const fingerEntry = (sideEntry[handTag.finger] ??= {});
+            fingerEntry[handTag.part] = localOffset;
+            if (handTag.part !== 'metacarpal') {
+              handKey = `${handTag.side}_${handTag.finger}_${handTag.part}`;
+            }
+          }
+        }
+
         bones.push({
           kind,
           mesh: cloned,
           jointId,
           clavicleSide,
-          localOffset: [normX - restAnchor[0], normY - restAnchor[1], normZ - restAnchor[2]],
+          handKey,
+          localOffset,
           modelScale: s,
         });
       }
     });
 
-    return { boneBindings: bones, muscleBindings: muscles, unassignedMeshCount: unassigned };
+    return {
+      boneBindings: bones,
+      muscleBindings: muscles,
+      unassignedMeshCount: unassigned,
+      handRestMap: handMap,
+    };
   }, [scene, calibration, gpuDqsUniforms]);
+
+  const handPhalanxTransforms = useMemo(
+    () => computeHandPhalanxTransforms(handRestMap, getPresetHandGripModes(activePresetId)),
+    [handRestMap, activePresetId]
+  );
 
   useEffect(() => {
     console.info(
@@ -511,6 +551,14 @@ function RealAnatomyModel({
             ? getSkinFresnelMaterial(isGhosted)
             : getZAnatomyBoneMaterial(isGhosted);
 
+        const handOverride = b.handKey ? handPhalanxTransforms[b.handKey] : undefined;
+        const offsetVec = handOverride ? handOverride.localOffset : b.localOffset;
+        const phalanxQuat = b.handKey
+          ? handOverride
+            ? handOverride.localQuaternion
+            : IDENTITY_QUAT
+          : undefined;
+
         return (
           <group
             key={`bone_${b.mesh.name}_${idx}`}
@@ -520,10 +568,11 @@ function RealAnatomyModel({
             <primitive
               object={b.mesh}
               position={[
-                b.localOffset[0] * hScale,
-                b.localOffset[1] * hScale,
-                b.localOffset[2] * hScale,
+                offsetVec[0] * hScale,
+                offsetVec[1] * hScale,
+                offsetVec[2] * hScale,
               ]}
+              quaternion={phalanxQuat}
               scale={[b.modelScale * hScale, b.modelScale * hScale, b.modelScale * hScale]}
               material={material}
               castShadow={!isGhosted && b.kind !== 'skin'}

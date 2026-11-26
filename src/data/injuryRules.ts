@@ -118,7 +118,10 @@ export const COMPOSITE_POSTURE_RULES: CompositeRuleDef[] = [
       const p = pose.pelvis;
       // Prone/supine/side-lying orientations are whole-body posture changes, not standing pelvic tilt
       if (Math.abs(p.flexion) >= 60 || Math.abs(p.abduction) >= 60) return [];
-      if (p.flexion > 22 || p.flexion < -20 || Math.abs(p.abduction) > 20) {
+      // Standing anterior tilt combined with lumbar hyperlordosis triggers facet stress;
+      // neutral/flexed-spine hip hinges (e.g., deadlift, RDL) flex pelvis intentionally without hyperlordosis.
+      const isHyperlordoticAnteriorTilt = p.flexion >= 18 && pose.lumbar.flexion <= -15;
+      if (isHyperlordoticAnteriorTilt || p.flexion < -20 || Math.abs(p.abduction) > 20) {
         return ['lumbar', 'hip_L', 'hip_R'];
       }
       return [];
