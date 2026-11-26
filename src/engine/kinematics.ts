@@ -115,7 +115,7 @@ export function quaternionToAnatomicalContinuous(
 
   const refEuler = anatomicalToEuler(jointId, reference);
 
-  // Near exact gimbal lock (|x| ≈ 90°), decouple z and y using reference.y
+  // Near gimbal lock (|x| ≈ 90°), decouple z and y using reference.y to prevent ±75° spikes
   if (Math.abs(Math.cos(ex)) < 1e-3) {
     const s = ex >= 0 ? 1 : -1;
     const lockedY = refEuler.y;
@@ -139,11 +139,21 @@ export function quaternionToAnatomicalContinuous(
 
   const altY = wrapRad(ey + Math.PI);
   const altZ = wrapRad(ez + Math.PI);
-  const candidates = [
+  const candidates: AnatomicalAngles[] = [
     eulerToAnatomical(jointId, { x: ex, y: ey, z: ez }),
     eulerToAnatomical(jointId, { x: Math.PI - ex, y: altY, z: altZ }),
     eulerToAnatomical(jointId, { x: -Math.PI - ex, y: altY, z: altZ }),
   ];
+
+  // When passing within ~7 deg of ±90° (|cos(ex)| < 0.12), include continuous branch locked to refEuler.y
+  // so Euler extraction does not jump 60-110 deg in abduction/rotation mid-trajectory.
+  if (Math.abs(Math.cos(ex)) < 0.12) {
+    const s = ex >= 0 ? 1 : -1;
+    const lockedY = refEuler.y;
+    const lockedZ = wrapRad(ez + s * ey - s * lockedY);
+    candidates.push(eulerToAnatomical(jointId, { x: ex, y: lockedY, z: lockedZ }));
+    candidates.push(eulerToAnatomical(jointId, { x: s * Math.PI - ex, y: lockedY, z: lockedZ }));
+  }
 
   let best = candidates[0];
   let bestDistSq = Infinity;
@@ -247,13 +257,17 @@ export function computeKinematics(
   }
 
   // Auto Grounding: shift = neutralLowestSupportY - currentLowestSupportY
-  // Guarantees exact 0.000 mm vertical drift in neutral standing while grounding standing, kneeling, and lying poses.
+  // Guarantees exact 0.000 mm vertical drift in neutral standing while grounding standing, tiptoe, kneeling, and lying poses.
   const neutralPelvisY = getOffsetY('pelvis');
   const neutralAnkleLY =
     neutralPelvisY + getOffsetY('hip_L') + getOffsetY('knee_L') + getOffsetY('ankle_L');
   const neutralAnkleRY =
     neutralPelvisY + getOffsetY('hip_R') + getOffsetY('knee_R') + getOffsetY('ankle_R');
   const neutralMinAnkleY = Math.min(neutralAnkleLY, neutralAnkleRY);
+  const neutralMinToeY = Math.min(
+    neutralAnkleLY + SKELETON_CONFIG.ankle_L.distalRatio[1] * heightM,
+    neutralAnkleRY + SKELETON_CONFIG.ankle_R.distalRatio[1] * heightM
+  );
   const kneePad = 0.055 * scale;
 
   let currentMinSupportY: number;
@@ -261,6 +275,8 @@ export function computeKinematics(
     currentMinSupportY = Math.min(
       joints.ankle_L.worldPosition[1] - neutralMinAnkleY,
       joints.ankle_R.worldPosition[1] - neutralMinAnkleY,
+      joints.ankle_L.distalWorldPosition[1] - neutralMinToeY,
+      joints.ankle_R.distalWorldPosition[1] - neutralMinToeY,
       joints.knee_L.worldPosition[1] - kneePad,
       joints.knee_R.worldPosition[1] - kneePad
     );
@@ -268,6 +284,8 @@ export function computeKinematics(
     currentMinSupportY = Math.min(
       joints.ankle_L.worldPosition[1] - 0.06 * scale,
       joints.ankle_R.worldPosition[1] - 0.06 * scale,
+      joints.ankle_L.distalWorldPosition[1] - 0.015 * scale,
+      joints.ankle_R.distalWorldPosition[1] - 0.015 * scale,
       joints.knee_L.worldPosition[1] - kneePad,
       joints.knee_R.worldPosition[1] - kneePad,
       joints.pelvis.worldPosition[1] - 0.095 * scale,

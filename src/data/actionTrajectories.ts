@@ -65,6 +65,19 @@ const _qB = new Quaternion();
 const _qOut = new Quaternion();
 const _refAngles: AnatomicalAngles = { flexion: 0, abduction: 0, rotation: 0 };
 
+// 1-2 DOF hinge/pivot joints should interpolate in anatomical axes directly so simultaneous
+// flexion + pronation/supination does not induce non-physiological 3rd-axis abduction (valgus/varus).
+const HINGE_OR_PIVOT_JOINTS = new Set<JointId>([
+  'elbow_L',
+  'elbow_R',
+  'wrist_L',
+  'wrist_R',
+  'knee_L',
+  'knee_R',
+  'ankle_L',
+  'ankle_R',
+]);
+
 export function interpolatePoseSlerp(keyframes: ActionKeyframe[], t: number): PoseMap {
   const clampedT = Math.max(0, Math.min(1, t));
   if (keyframes.length === 0) return createNeutralPose();
@@ -87,6 +100,16 @@ export function interpolatePoseSlerp(keyframes: ActionKeyframe[], t: number): Po
   for (const jId of JOINT_ORDER as JointId[]) {
     const a = kfA.pose[jId];
     const b = kfB.pose[jId];
+
+    if (HINGE_OR_PIVOT_JOINTS.has(jId)) {
+      out[jId] = {
+        flexion: a.flexion + (b.flexion - a.flexion) * alpha,
+        abduction: a.abduction + (b.abduction - a.abduction) * alpha,
+        rotation: a.rotation + (b.rotation - a.rotation) * alpha,
+      };
+      continue;
+    }
+
     const eA = anatomicalToEuler(jId, a);
     const eB = anatomicalToEuler(jId, b);
     _qA.copy(localEulerToQuaternion(eA));
@@ -110,7 +133,7 @@ export const ACTION_TRAJECTORIES: Record<string, ActionTrajectory> = {
     '微蹲站立',
     '外側受推',
     '外翻撞擊',
-    { hip_R: { flexion: 10, abduction: 0, rotation: 0 }, knee_R: { flexion: 15, abduction: 0, rotation: 0 } }
+    { hip_R: { flexion: 10, abduction: 0, rotation: 0 }, knee_R: { flexion: 15, abduction: 0, rotation: 0 }, ankle_R: { flexion: -5, abduction: 0, rotation: 0 } }
   ),
   rounded_twisted_lift: makeTraj(
     'rounded_twisted_lift',
@@ -119,7 +142,7 @@ export const ACTION_TRAJECTORIES: Record<string, ActionTrajectory> = {
     '前傾伸手',
     '圓背轉身極限',
     { elbow_L: { flexion: 5, abduction: 0, rotation: -90 }, elbow_R: { flexion: 5, abduction: 0, rotation: -90 } },
-    { lumbar: { flexion: 22, abduction: 0, rotation: 8 }, shoulder_L: { flexion: 25, abduction: 8, rotation: 0 }, shoulder_R: { flexion: 25, abduction: 8, rotation: 0 }, elbow_L: { flexion: 15, abduction: 0, rotation: -165 }, elbow_R: { flexion: 15, abduction: 0, rotation: -165 }, hip_L: { flexion: 15, abduction: 4, rotation: 0 }, hip_R: { flexion: 15, abduction: 4, rotation: 0 } }
+    { lumbar: { flexion: 22, abduction: 0, rotation: 8 }, shoulder_L: { flexion: 25, abduction: 8, rotation: 0 }, shoulder_R: { flexion: 25, abduction: 8, rotation: 0 }, elbow_L: { flexion: 15, abduction: 0, rotation: -165 }, elbow_R: { flexion: 15, abduction: 0, rotation: -165 }, hip_L: { flexion: 15, abduction: 4, rotation: 0 }, hip_R: { flexion: 15, abduction: 4, rotation: 0 }, knee_L: { flexion: 15, abduction: 0, rotation: 0 }, knee_R: { flexion: 15, abduction: 0, rotation: 0 } }
   ),
   shoulder_impingement_press: makeTraj(
     'shoulder_impingement_press',
@@ -138,7 +161,7 @@ export const ACTION_TRAJECTORIES: Record<string, ActionTrajectory> = {
     '離心半蹲',
     '深蹲底端',
     { shoulder_L: { flexion: -20, abduction: 65, rotation: 55 }, shoulder_R: { flexion: -20, abduction: 65, rotation: 55 }, elbow_L: { flexion: 110, abduction: 0, rotation: -165 }, elbow_R: { flexion: 110, abduction: 0, rotation: -165 }, wrist_L: { flexion: -20, abduction: 0, rotation: 0 }, wrist_R: { flexion: -20, abduction: 0, rotation: 0 } },
-    { lumbar: { flexion: 10, abduction: 0, rotation: 0 }, hip_L: { flexion: 55, abduction: 12, rotation: 6 }, hip_R: { flexion: 55, abduction: 12, rotation: 6 }, knee_L: { flexion: 60, abduction: 0, rotation: 0 }, knee_R: { flexion: 60, abduction: 0, rotation: 0 }, ankle_L: { flexion: 12, abduction: 0, rotation: 0 }, ankle_R: { flexion: 12, abduction: 0, rotation: 0 }, shoulder_L: { flexion: -20, abduction: 65, rotation: 55 }, shoulder_R: { flexion: -20, abduction: 65, rotation: 55 }, elbow_L: { flexion: 110, abduction: 0, rotation: -165 }, elbow_R: { flexion: 110, abduction: 0, rotation: -165 }, wrist_L: { flexion: -20, abduction: 0, rotation: 0 }, wrist_R: { flexion: -20, abduction: 0, rotation: 0 } }
+    { pelvis: { flexion: 12, abduction: 0, rotation: 0 }, lumbar: { flexion: 6, abduction: 0, rotation: 0 }, thorax: { flexion: 4, abduction: 0, rotation: 0 }, hip_L: { flexion: 48, abduction: 12, rotation: 6 }, hip_R: { flexion: 48, abduction: 12, rotation: 6 }, knee_L: { flexion: 60, abduction: 0, rotation: 0 }, knee_R: { flexion: 60, abduction: 0, rotation: 0 }, ankle_L: { flexion: -12, abduction: 0, rotation: 0 }, ankle_R: { flexion: -12, abduction: 0, rotation: 0 }, shoulder_L: { flexion: -20, abduction: 65, rotation: 55 }, shoulder_R: { flexion: -20, abduction: 65, rotation: 55 }, elbow_L: { flexion: 110, abduction: 0, rotation: -165 }, elbow_R: { flexion: 110, abduction: 0, rotation: -165 }, wrist_L: { flexion: -20, abduction: 0, rotation: 0 }, wrist_R: { flexion: -20, abduction: 0, rotation: 0 } }
   ),
   sumo_deadlift_start: makeTraj(
     'sumo_deadlift_start',
@@ -146,7 +169,7 @@ export const ACTION_TRAJECTORIES: Record<string, ActionTrajectory> = {
     '寬站鎖定',
     '屈髖下放',
     '起始拉槓',
-    { elbow_L: { flexion: 5, abduction: 0, rotation: -170 }, elbow_R: { flexion: 5, abduction: 0, rotation: -170 }, hip_L: { flexion: 5, abduction: 35, rotation: 22 }, hip_R: { flexion: 5, abduction: 35, rotation: 22 } }
+    { elbow_L: { flexion: 5, abduction: 0, rotation: -170 }, elbow_R: { flexion: 5, abduction: 0, rotation: -170 }, hip_L: { flexion: 5, abduction: 35, rotation: 22 }, hip_R: { flexion: 5, abduction: 35, rotation: 22 }, knee_L: { flexion: 5, abduction: 0, rotation: 0 }, knee_R: { flexion: 5, abduction: 0, rotation: 0 } }
   ),
   romanian_deadlift: makeTraj(
     'romanian_deadlift',
@@ -155,7 +178,7 @@ export const ACTION_TRAJECTORIES: Record<string, ActionTrajectory> = {
     '髖鉸鏈中段',
     '最低拉伸',
     { elbow_L: { flexion: 5, abduction: 0, rotation: -170 }, elbow_R: { flexion: 5, abduction: 0, rotation: -170 } },
-    { lumbar: { flexion: 8, abduction: 0, rotation: 0 }, shoulder_L: { flexion: 28, abduction: 8, rotation: 0 }, shoulder_R: { flexion: 28, abduction: 8, rotation: 0 }, elbow_L: { flexion: 5, abduction: 0, rotation: -170 }, elbow_R: { flexion: 5, abduction: 0, rotation: -170 }, hip_L: { flexion: 38, abduction: 6, rotation: 0 }, hip_R: { flexion: 38, abduction: 6, rotation: 0 }, knee_L: { flexion: 10, abduction: 0, rotation: 0 }, knee_R: { flexion: 10, abduction: 0, rotation: 0 } }
+    { pelvis: { flexion: 28, abduction: 0, rotation: 0 }, lumbar: { flexion: 5, abduction: 0, rotation: 0 }, shoulder_L: { flexion: 34, abduction: 8, rotation: 0 }, shoulder_R: { flexion: 34, abduction: 8, rotation: 0 }, elbow_L: { flexion: 5, abduction: 0, rotation: -170 }, elbow_R: { flexion: 5, abduction: 0, rotation: -170 }, hip_L: { flexion: 10, abduction: 6, rotation: 0 }, hip_R: { flexion: 10, abduction: 6, rotation: 0 }, knee_L: { flexion: 12, abduction: 0, rotation: 0 }, knee_R: { flexion: 12, abduction: 0, rotation: 0 }, ankle_L: { flexion: -2, abduction: 0, rotation: 0 }, ankle_R: { flexion: -2, abduction: 0, rotation: 0 } }
   ),
   flat_bench_press_bottom: makeTraj(
     'flat_bench_press_bottom',
@@ -163,8 +186,8 @@ export const ACTION_TRAJECTORIES: Record<string, ActionTrajectory> = {
     '頂端鎖定',
     '下放中段',
     '觸胸底端',
-    { pelvis: { flexion: -88, abduction: 0, rotation: 0 }, shoulder_L: { flexion: 85, abduction: 15, rotation: 0 }, shoulder_R: { flexion: 85, abduction: 15, rotation: 0 }, elbow_L: { flexion: 10, abduction: 0, rotation: -95 }, elbow_R: { flexion: 10, abduction: 0, rotation: -95 }, wrist_L: { flexion: -18, abduction: 0, rotation: 0 }, wrist_R: { flexion: -18, abduction: 0, rotation: 0 }, hip_L: { flexion: -10, abduction: 15, rotation: 0 }, hip_R: { flexion: -10, abduction: 15, rotation: 0 }, knee_L: { flexion: 80, abduction: 0, rotation: 0 }, knee_R: { flexion: 80, abduction: 0, rotation: 0 } },
-    { pelvis: { flexion: -88, abduction: 0, rotation: 0 }, shoulder_L: { flexion: 35, abduction: 45, rotation: 22 }, shoulder_R: { flexion: 35, abduction: 45, rotation: 22 }, elbow_L: { flexion: 45, abduction: 0, rotation: -95 }, elbow_R: { flexion: 45, abduction: 0, rotation: -95 }, wrist_L: { flexion: -18, abduction: 0, rotation: 0 }, wrist_R: { flexion: -18, abduction: 0, rotation: 0 }, hip_L: { flexion: -10, abduction: 15, rotation: 0 }, hip_R: { flexion: -10, abduction: 15, rotation: 0 }, knee_L: { flexion: 80, abduction: 0, rotation: 0 }, knee_R: { flexion: 80, abduction: 0, rotation: 0 } }
+    { pelvis: { flexion: -88, abduction: 0, rotation: 0 }, shoulder_L: { flexion: 88, abduction: -22, rotation: 0 }, shoulder_R: { flexion: 88, abduction: -22, rotation: 0 }, elbow_L: { flexion: 10, abduction: 0, rotation: -165 }, elbow_R: { flexion: 10, abduction: 0, rotation: -165 }, wrist_L: { flexion: -65, abduction: 0, rotation: 0 }, wrist_R: { flexion: -65, abduction: 0, rotation: 0 }, hip_L: { flexion: -10, abduction: 15, rotation: 0 }, hip_R: { flexion: -10, abduction: 15, rotation: 0 }, knee_L: { flexion: 80, abduction: 0, rotation: 0 }, knee_R: { flexion: 80, abduction: 0, rotation: 0 }, ankle_L: { flexion: -10, abduction: 0, rotation: 0 }, ankle_R: { flexion: -10, abduction: 0, rotation: 0 } },
+    { pelvis: { flexion: -88, abduction: 0, rotation: 0 }, shoulder_L: { flexion: 38, abduction: 25, rotation: 25 }, shoulder_R: { flexion: 38, abduction: 25, rotation: 25 }, elbow_L: { flexion: 52, abduction: 0, rotation: -128 }, elbow_R: { flexion: 52, abduction: 0, rotation: -128 }, wrist_L: { flexion: -42, abduction: 0, rotation: 0 }, wrist_R: { flexion: -42, abduction: 0, rotation: 0 }, hip_L: { flexion: -10, abduction: 15, rotation: 0 }, hip_R: { flexion: -10, abduction: 15, rotation: 0 }, knee_L: { flexion: 80, abduction: 0, rotation: 0 }, knee_R: { flexion: 80, abduction: 0, rotation: 0 }, ankle_L: { flexion: -10, abduction: 0, rotation: 0 }, ankle_R: { flexion: -10, abduction: 0, rotation: 0 } }
   ),
   incline_dumbbell_press_bottom: makeTraj(
     'incline_dumbbell_press_bottom',
@@ -172,7 +195,8 @@ export const ACTION_TRAJECTORIES: Record<string, ActionTrajectory> = {
     '頂端鎖定',
     '離心下放',
     '底端拉伸',
-    { pelvis: { flexion: -45, abduction: 0, rotation: 0 }, shoulder_L: { flexion: 115, abduction: 15, rotation: 0 }, shoulder_R: { flexion: 115, abduction: 15, rotation: 0 }, elbow_L: { flexion: 10, abduction: 0, rotation: -95 }, elbow_R: { flexion: 10, abduction: 0, rotation: -95 }, wrist_L: { flexion: -15, abduction: 0, rotation: 0 }, wrist_R: { flexion: -15, abduction: 0, rotation: 0 }, hip_L: { flexion: 50, abduction: 12, rotation: 0 }, hip_R: { flexion: 50, abduction: 12, rotation: 0 }, knee_L: { flexion: 70, abduction: 0, rotation: 0 }, knee_R: { flexion: 70, abduction: 0, rotation: 0 } }
+    { pelvis: { flexion: -45, abduction: 0, rotation: 0 }, shoulder_L: { flexion: 82, abduction: 18, rotation: 0 }, shoulder_R: { flexion: 82, abduction: 18, rotation: 0 }, elbow_L: { flexion: 10, abduction: 0, rotation: -140 }, elbow_R: { flexion: 10, abduction: 0, rotation: -140 }, wrist_L: { flexion: -55, abduction: 0, rotation: 0 }, wrist_R: { flexion: -55, abduction: 0, rotation: 0 }, hip_L: { flexion: 50, abduction: 12, rotation: 0 }, hip_R: { flexion: 50, abduction: 12, rotation: 0 }, knee_L: { flexion: 70, abduction: 0, rotation: 0 }, knee_R: { flexion: 70, abduction: 0, rotation: 0 }, ankle_L: { flexion: -20, abduction: 0, rotation: 0 }, ankle_R: { flexion: -20, abduction: 0, rotation: 0 } },
+    { pelvis: { flexion: -45, abduction: 0, rotation: 0 }, shoulder_L: { flexion: 54, abduction: 35, rotation: 22 }, shoulder_R: { flexion: 54, abduction: 35, rotation: 22 }, elbow_L: { flexion: 50, abduction: 0, rotation: -130 }, elbow_R: { flexion: 50, abduction: 0, rotation: -130 }, wrist_L: { flexion: -40, abduction: 0, rotation: 0 }, wrist_R: { flexion: -40, abduction: 0, rotation: 0 }, hip_L: { flexion: 50, abduction: 12, rotation: 0 }, hip_R: { flexion: 50, abduction: 12, rotation: 0 }, knee_L: { flexion: 70, abduction: 0, rotation: 0 }, knee_R: { flexion: 70, abduction: 0, rotation: 0 }, ankle_L: { flexion: -20, abduction: 0, rotation: 0 }, ankle_R: { flexion: -20, abduction: 0, rotation: 0 } }
   ),
   standing_overhead_press: makeTraj(
     'standing_overhead_press',
@@ -180,8 +204,8 @@ export const ACTION_TRAJECTORIES: Record<string, ActionTrajectory> = {
     '鎖骨預備',
     '過頭推起',
     '頂峰鎖定',
-    { shoulder_L: { flexion: 45, abduction: 25, rotation: 45 }, shoulder_R: { flexion: 45, abduction: 25, rotation: 45 }, elbow_L: { flexion: 120, abduction: 0, rotation: -170 }, elbow_R: { flexion: 120, abduction: 0, rotation: -170 }, wrist_L: { flexion: -18, abduction: 0, rotation: 0 }, wrist_R: { flexion: -18, abduction: 0, rotation: 0 } },
-    { shoulder_L: { flexion: 105, abduction: 20, rotation: 20 }, shoulder_R: { flexion: 105, abduction: 20, rotation: 20 }, elbow_L: { flexion: 65, abduction: 0, rotation: -170 }, elbow_R: { flexion: 65, abduction: 0, rotation: -170 }, wrist_L: { flexion: -18, abduction: 0, rotation: 0 }, wrist_R: { flexion: -18, abduction: 0, rotation: 0 } }
+    { shoulder_L: { flexion: 45, abduction: 25, rotation: 45 }, shoulder_R: { flexion: 45, abduction: 25, rotation: 45 }, elbow_L: { flexion: 120, abduction: 0, rotation: -170 }, elbow_R: { flexion: 120, abduction: 0, rotation: -170 }, wrist_L: { flexion: -55, abduction: 0, rotation: 0 }, wrist_R: { flexion: -55, abduction: 0, rotation: 0 } },
+    { shoulder_L: { flexion: 105, abduction: 5, rotation: 20 }, shoulder_R: { flexion: 105, abduction: 5, rotation: 20 }, elbow_L: { flexion: 65, abduction: 0, rotation: -170 }, elbow_R: { flexion: 65, abduction: 0, rotation: -170 }, wrist_L: { flexion: -60, abduction: 0, rotation: 0 }, wrist_R: { flexion: -60, abduction: 0, rotation: 0 } }
   ),
   dumbbell_lateral_raise_top: makeTraj(
     'dumbbell_lateral_raise_top',
@@ -197,7 +221,7 @@ export const ACTION_TRAJECTORIES: Record<string, ActionTrajectory> = {
     '俯身懸槓',
     '向心拉起',
     '頂峰夾背',
-    { lumbar: { flexion: 20, abduction: 0, rotation: 0 }, thorax: { flexion: 12, abduction: 0, rotation: 0 }, neck: { flexion: -18, abduction: 0, rotation: 0 }, shoulder_L: { flexion: 65, abduction: 8, rotation: 0 }, shoulder_R: { flexion: 65, abduction: 8, rotation: 0 }, elbow_L: { flexion: 10, abduction: 0, rotation: -170 }, elbow_R: { flexion: 10, abduction: 0, rotation: -170 }, hip_L: { flexion: 55, abduction: 8, rotation: 0 }, hip_R: { flexion: 55, abduction: 8, rotation: 0 }, knee_L: { flexion: 22, abduction: 0, rotation: 0 }, knee_R: { flexion: 22, abduction: 0, rotation: 0 } }
+    { pelvis: { flexion: 45, abduction: 0, rotation: 0 }, lumbar: { flexion: 12, abduction: 0, rotation: 0 }, thorax: { flexion: 8, abduction: 0, rotation: 0 }, neck: { flexion: -18, abduction: 0, rotation: 0 }, shoulder_L: { flexion: 65, abduction: 8, rotation: 0 }, shoulder_R: { flexion: 65, abduction: 8, rotation: 0 }, elbow_L: { flexion: 10, abduction: 0, rotation: -170 }, elbow_R: { flexion: 10, abduction: 0, rotation: -170 }, hip_L: { flexion: 18, abduction: 8, rotation: 0 }, hip_R: { flexion: 18, abduction: 8, rotation: 0 }, knee_L: { flexion: 28, abduction: 0, rotation: 0 }, knee_R: { flexion: 28, abduction: 0, rotation: 0 }, ankle_L: { flexion: -10, abduction: 0, rotation: 0 }, ankle_R: { flexion: -10, abduction: 0, rotation: 0 } }
   ),
   pull_up_peak: makeTraj(
     'pull_up_peak',
@@ -205,7 +229,7 @@ export const ACTION_TRAJECTORIES: Record<string, ActionTrajectory> = {
     '懸垂預備',
     '拉起中段',
     '過槓頂峰',
-    { shoulder_L: { flexion: 165, abduction: 25, rotation: 0 }, shoulder_R: { flexion: 165, abduction: 25, rotation: 0 }, elbow_L: { flexion: 10, abduction: 0, rotation: -170 }, elbow_R: { flexion: 10, abduction: 0, rotation: -170 }, knee_L: { flexion: 30, abduction: 0, rotation: 0 }, knee_R: { flexion: 30, abduction: 0, rotation: 0 } }
+    { shoulder_L: { flexion: 18, abduction: 150, rotation: 0 }, shoulder_R: { flexion: 18, abduction: 150, rotation: 0 }, elbow_L: { flexion: 10, abduction: 0, rotation: -165 }, elbow_R: { flexion: 10, abduction: 0, rotation: -165 }, hip_L: { flexion: 10, abduction: 0, rotation: 0 }, hip_R: { flexion: 10, abduction: 0, rotation: 0 }, knee_L: { flexion: 35, abduction: 0, rotation: 0 }, knee_R: { flexion: 35, abduction: 0, rotation: 0 }, ankle_L: { flexion: -20, abduction: 0, rotation: 0 }, ankle_R: { flexion: -20, abduction: 0, rotation: 0 } }
   ),
   wide_grip_lat_pulldown: makeTraj(
     'wide_grip_lat_pulldown',
@@ -213,7 +237,7 @@ export const ACTION_TRAJECTORIES: Record<string, ActionTrajectory> = {
     '上方伸展',
     '肩胛下壓',
     '鎖骨頂峰',
-    { shoulder_L: { flexion: 150, abduction: 35, rotation: 10 }, shoulder_R: { flexion: 150, abduction: 35, rotation: 10 }, elbow_L: { flexion: 15, abduction: 0, rotation: -170 }, elbow_R: { flexion: 15, abduction: 0, rotation: -170 }, hip_L: { flexion: 88, abduction: 12, rotation: 0 }, hip_R: { flexion: 88, abduction: 12, rotation: 0 }, knee_L: { flexion: 90, abduction: 0, rotation: 0 }, knee_R: { flexion: 90, abduction: 0, rotation: 0 } }
+    { shoulder_L: { flexion: 18, abduction: 150, rotation: 0 }, shoulder_R: { flexion: 18, abduction: 150, rotation: 0 }, elbow_L: { flexion: 15, abduction: 0, rotation: -165 }, elbow_R: { flexion: 15, abduction: 0, rotation: -165 }, hip_L: { flexion: 88, abduction: 12, rotation: 0 }, hip_R: { flexion: 88, abduction: 12, rotation: 0 }, knee_L: { flexion: 90, abduction: 0, rotation: 0 }, knee_R: { flexion: 90, abduction: 0, rotation: 0 }, ankle_L: { flexion: -2, abduction: 0, rotation: 0 }, ankle_R: { flexion: -2, abduction: 0, rotation: 0 } }
   ),
   dumbbell_bicep_curl_peak: makeTraj(
     'dumbbell_bicep_curl_peak',
@@ -245,7 +269,7 @@ export const ACTION_TRAJECTORIES: Record<string, ActionTrajectory> = {
     '俯身伸臂',
     '拉起中段',
     '頂峰夾背',
-    { lumbar: { flexion: 32, abduction: 0, rotation: 4 }, thorax: { flexion: 15, abduction: 0, rotation: 3 }, shoulder_L: { flexion: 75, abduction: 10, rotation: 0 }, shoulder_R: { flexion: 75, abduction: 10, rotation: 0 }, elbow_L: { flexion: 15, abduction: 0, rotation: -90 }, elbow_R: { flexion: 12, abduction: 0, rotation: -90 }, hip_L: { flexion: 55, abduction: 8, rotation: 0 }, knee_L: { flexion: 35, abduction: 0, rotation: 0 }, hip_R: { flexion: 40, abduction: 8, rotation: 0 }, knee_R: { flexion: 20, abduction: 0, rotation: 0 } }
+    { pelvis: { flexion: 45, abduction: 0, rotation: 0 }, lumbar: { flexion: 10, abduction: 0, rotation: 4 }, thorax: { flexion: 5, abduction: 0, rotation: 3 }, shoulder_L: { flexion: 58, abduction: 10, rotation: 0 }, elbow_L: { flexion: 5, abduction: 0, rotation: -90 }, shoulder_R: { flexion: 55, abduction: 10, rotation: 0 }, elbow_R: { flexion: 12, abduction: 0, rotation: -90 }, hip_L: { flexion: 25, abduction: 8, rotation: 0 }, knee_L: { flexion: 35, abduction: 0, rotation: 0 }, ankle_L: { flexion: -10, abduction: 0, rotation: 0 }, hip_R: { flexion: 15, abduction: 8, rotation: 0 }, knee_R: { flexion: 20, abduction: 0, rotation: 0 }, ankle_R: { flexion: -5, abduction: 0, rotation: 0 } }
   ),
   farmers_walk: makeTraj(
     'farmers_walk',
@@ -261,7 +285,7 @@ export const ACTION_TRAJECTORIES: Record<string, ActionTrajectory> = {
     '直立鎖定',
     '屈髖下放',
     '起始拉槓',
-    { elbow_L: { flexion: 5, abduction: 0, rotation: -170 }, elbow_R: { flexion: 5, abduction: 0, rotation: -170 }, hip_L: { flexion: 5, abduction: 8, rotation: 5 }, hip_R: { flexion: 5, abduction: 8, rotation: 5 } }
+    { elbow_L: { flexion: 5, abduction: 0, rotation: -170 }, elbow_R: { flexion: 5, abduction: 0, rotation: -170 }, hip_L: { flexion: 5, abduction: 8, rotation: 5 }, hip_R: { flexion: 5, abduction: 8, rotation: 5 }, knee_L: { flexion: 5, abduction: 0, rotation: 0 }, knee_R: { flexion: 5, abduction: 0, rotation: 0 } }
   ),
   barbell_front_squat_bottom: makeTraj(
     'barbell_front_squat_bottom',
@@ -277,7 +301,7 @@ export const ACTION_TRAJECTORIES: Record<string, ActionTrajectory> = {
     '屈髖底端',
     '推髖上頂',
     '水平鎖定',
-    { pelvis: { flexion: -70, abduction: 0, rotation: 0 }, shoulder_L: { flexion: -20, abduction: 25, rotation: 0 }, shoulder_R: { flexion: -20, abduction: 25, rotation: 0 }, elbow_L: { flexion: 20, abduction: 0, rotation: -165 }, elbow_R: { flexion: 20, abduction: 0, rotation: -165 }, hip_L: { flexion: 65, abduction: 10, rotation: 0 }, hip_R: { flexion: 65, abduction: 10, rotation: 0 }, knee_L: { flexion: 110, abduction: 0, rotation: 0 }, knee_R: { flexion: 110, abduction: 0, rotation: 0 } }
+    { pelvis: { flexion: -70, abduction: 0, rotation: 0 }, shoulder_L: { flexion: -15, abduction: 15, rotation: 0 }, shoulder_R: { flexion: -15, abduction: 15, rotation: 0 }, elbow_L: { flexion: 20, abduction: 0, rotation: -165 }, elbow_R: { flexion: 20, abduction: 0, rotation: -165 }, hip_L: { flexion: 65, abduction: 10, rotation: 0 }, hip_R: { flexion: 65, abduction: 10, rotation: 0 }, knee_L: { flexion: 110, abduction: 0, rotation: 0 }, knee_R: { flexion: 110, abduction: 0, rotation: 0 } }
   ),
   seated_cable_row_peak: makeTraj(
     'seated_cable_row_peak',
@@ -285,7 +309,7 @@ export const ACTION_TRAJECTORIES: Record<string, ActionTrajectory> = {
     '前伸拉長',
     '後拉夾背',
     '頂峰收縮',
-    { shoulder_L: { flexion: 75, abduction: 10, rotation: 0 }, shoulder_R: { flexion: 75, abduction: 10, rotation: 0 }, elbow_L: { flexion: 10, abduction: 0, rotation: -90 }, elbow_R: { flexion: 10, abduction: 0, rotation: -90 }, hip_L: { flexion: 88, abduction: 8, rotation: 0 }, hip_R: { flexion: 88, abduction: 8, rotation: 0 }, knee_L: { flexion: 15, abduction: 0, rotation: 0 }, knee_R: { flexion: 15, abduction: 0, rotation: 0 } }
+    { shoulder_L: { flexion: 75, abduction: 10, rotation: 0 }, shoulder_R: { flexion: 75, abduction: 10, rotation: 0 }, elbow_L: { flexion: 10, abduction: 0, rotation: -90 }, elbow_R: { flexion: 10, abduction: 0, rotation: -90 }, hip_L: { flexion: 88, abduction: 8, rotation: 0 }, hip_R: { flexion: 88, abduction: 8, rotation: 0 }, knee_L: { flexion: 25, abduction: 0, rotation: 0 }, knee_R: { flexion: 25, abduction: 0, rotation: 0 }, ankle_L: { flexion: 15, abduction: 0, rotation: 0 }, ankle_R: { flexion: 15, abduction: 0, rotation: 0 } }
   ),
   cable_face_pull_peak: makeTraj(
     'cable_face_pull_peak',
@@ -293,7 +317,7 @@ export const ACTION_TRAJECTORIES: Record<string, ActionTrajectory> = {
     '前伸預備',
     '後拉外展',
     '外旋頂峰',
-    { shoulder_L: { flexion: 80, abduction: 20, rotation: 0 }, shoulder_R: { flexion: 80, abduction: 20, rotation: 0 }, elbow_L: { flexion: 15, abduction: 0, rotation: -90 }, elbow_R: { flexion: 15, abduction: 0, rotation: -90 }, hip_L: { flexion: 12, abduction: 6, rotation: 0 }, knee_L: { flexion: 15, abduction: 0, rotation: 0 } }
+    { shoulder_L: { flexion: 80, abduction: 20, rotation: 0 }, shoulder_R: { flexion: 80, abduction: 20, rotation: 0 }, elbow_L: { flexion: 15, abduction: 0, rotation: -90 }, elbow_R: { flexion: 15, abduction: 0, rotation: -90 }, hip_L: { flexion: 12, abduction: 6, rotation: 0 }, knee_L: { flexion: 15, abduction: 0, rotation: 0 }, ankle_L: { flexion: -3, abduction: 0, rotation: 0 } }
   ),
   parallel_bar_dip_bottom: makeTraj(
     'parallel_bar_dip_bottom',
@@ -301,7 +325,7 @@ export const ACTION_TRAJECTORIES: Record<string, ActionTrajectory> = {
     '頂端撐直',
     '離心下放',
     '底端拉伸',
-    { pelvis: { flexion: 12, abduction: 0, rotation: 0 }, shoulder_L: { flexion: 0, abduction: 12, rotation: 0 }, shoulder_R: { flexion: 0, abduction: 12, rotation: 0 }, elbow_L: { flexion: 8, abduction: 0, rotation: -90 }, elbow_R: { flexion: 8, abduction: 0, rotation: -90 }, knee_L: { flexion: 45, abduction: 0, rotation: 0 }, knee_R: { flexion: 45, abduction: 0, rotation: 0 } }
+    { pelvis: { flexion: 12, abduction: 0, rotation: 0 }, shoulder_L: { flexion: 0, abduction: 12, rotation: 0 }, shoulder_R: { flexion: 0, abduction: 12, rotation: 0 }, elbow_L: { flexion: 8, abduction: 0, rotation: -90 }, elbow_R: { flexion: 8, abduction: 0, rotation: -90 }, hip_L: { flexion: 15, abduction: 0, rotation: 0 }, hip_R: { flexion: 15, abduction: 0, rotation: 0 }, knee_L: { flexion: 55, abduction: 0, rotation: 0 }, knee_R: { flexion: 55, abduction: 0, rotation: 0 }, ankle_L: { flexion: -20, abduction: 0, rotation: 0 }, ankle_R: { flexion: -20, abduction: 0, rotation: 0 } }
   ),
   dumbbell_chest_fly_bottom: makeTraj(
     'dumbbell_chest_fly_bottom',
@@ -309,7 +333,7 @@ export const ACTION_TRAJECTORIES: Record<string, ActionTrajectory> = {
     '頂端夾胸',
     '離心開展',
     '底端拉伸',
-    { pelvis: { flexion: -88, abduction: 0, rotation: 0 }, shoulder_L: { flexion: 85, abduction: 10, rotation: 0 }, shoulder_R: { flexion: 85, abduction: 10, rotation: 0 }, elbow_L: { flexion: 20, abduction: 0, rotation: -45 }, elbow_R: { flexion: 20, abduction: 0, rotation: -45 }, hip_L: { flexion: -10, abduction: 15, rotation: 0 }, hip_R: { flexion: -10, abduction: 15, rotation: 0 }, knee_L: { flexion: 80, abduction: 0, rotation: 0 }, knee_R: { flexion: 80, abduction: 0, rotation: 0 } }
+    { pelvis: { flexion: -88, abduction: 0, rotation: 0 }, shoulder_L: { flexion: 85, abduction: 10, rotation: 0 }, shoulder_R: { flexion: 85, abduction: 10, rotation: 0 }, elbow_L: { flexion: 20, abduction: 0, rotation: -45 }, elbow_R: { flexion: 20, abduction: 0, rotation: -45 }, hip_L: { flexion: -10, abduction: 15, rotation: 0 }, hip_R: { flexion: -10, abduction: 15, rotation: 0 }, knee_L: { flexion: 80, abduction: 0, rotation: 0 }, knee_R: { flexion: 80, abduction: 0, rotation: 0 }, ankle_L: { flexion: -10, abduction: 0, rotation: 0 }, ankle_R: { flexion: -10, abduction: 0, rotation: 0 } }
   ),
   hammer_curl_peak: makeTraj(
     'hammer_curl_peak',
@@ -325,7 +349,7 @@ export const ACTION_TRAJECTORIES: Record<string, ActionTrajectory> = {
     '屈肘預備',
     '下壓伸展',
     '底端鎖定',
-    { pelvis: { flexion: 8, abduction: 0, rotation: 0 }, shoulder_L: { flexion: 8, abduction: 8, rotation: 0 }, shoulder_R: { flexion: 8, abduction: 8, rotation: 0 }, elbow_L: { flexion: 110, abduction: 0, rotation: -170 }, elbow_R: { flexion: 110, abduction: 0, rotation: -170 } }
+    { pelvis: { flexion: 8, abduction: 0, rotation: 0 }, shoulder_L: { flexion: 8, abduction: 8, rotation: 0 }, shoulder_R: { flexion: 8, abduction: 8, rotation: 0 }, elbow_L: { flexion: 110, abduction: 0, rotation: -90 }, elbow_R: { flexion: 110, abduction: 0, rotation: -90 } }
   ),
   standing_calf_raise_peak: makeTraj(
     'standing_calf_raise_peak',
@@ -333,7 +357,7 @@ export const ACTION_TRAJECTORIES: Record<string, ActionTrajectory> = {
     '平踩預備',
     '發力踮腳',
     '頂峰蹠屈',
-    { ankle_L: { flexion: 10, abduction: 0, rotation: 0 }, ankle_R: { flexion: 10, abduction: 0, rotation: 0 } }
+    { ankle_L: { flexion: -10, abduction: 0, rotation: 0 }, ankle_R: { flexion: -10, abduction: 0, rotation: 0 } }
   ),
 
   // === 2. 徒手與核心穩定 (8 種) ===
@@ -343,7 +367,7 @@ export const ACTION_TRAJECTORIES: Record<string, ActionTrajectory> = {
     '高平板預備',
     '離心下降',
     '底端停頓',
-    { pelvis: { flexion: 86, abduction: 0, rotation: 0 }, shoulder_L: { flexion: 80, abduction: 18, rotation: 0 }, shoulder_R: { flexion: 80, abduction: 18, rotation: 0 }, elbow_L: { flexion: 8, abduction: 0, rotation: -170 }, elbow_R: { flexion: 8, abduction: 0, rotation: -170 }, wrist_L: { flexion: -75, abduction: 0, rotation: 0 }, wrist_R: { flexion: -75, abduction: 0, rotation: 0 } }
+    { pelvis: { flexion: 86, abduction: 0, rotation: 0 }, shoulder_L: { flexion: 80, abduction: 18, rotation: 0 }, shoulder_R: { flexion: 80, abduction: 18, rotation: 0 }, elbow_L: { flexion: 8, abduction: 0, rotation: -170 }, elbow_R: { flexion: 8, abduction: 0, rotation: -170 }, wrist_L: { flexion: -70, abduction: 0, rotation: 0 }, wrist_R: { flexion: -70, abduction: 0, rotation: 0 } }
   ),
   standard_plank: makeTraj(
     'standard_plank',
@@ -391,7 +415,7 @@ export const ACTION_TRAJECTORIES: Record<string, ActionTrajectory> = {
     '俯臥貼地',
     '離地啟動',
     '背伸頂峰',
-    { pelvis: { flexion: 88, abduction: 0, rotation: 0 }, shoulder_L: { flexion: 165, abduction: 18, rotation: 0 }, shoulder_R: { flexion: 165, abduction: 18, rotation: 0 }, elbow_L: { flexion: 5, abduction: 0, rotation: -170 }, elbow_R: { flexion: 5, abduction: 0, rotation: -170 } }
+    { pelvis: { flexion: 88, abduction: 0, rotation: 0 }, shoulder_L: { flexion: 165, abduction: -8, rotation: 0 }, shoulder_R: { flexion: 165, abduction: -8, rotation: 0 }, elbow_L: { flexion: 5, abduction: 0, rotation: -170 }, elbow_R: { flexion: 5, abduction: 0, rotation: -170 } }
   ),
   single_leg_rdl_balance: makeTraj(
     'single_leg_rdl_balance',
@@ -399,7 +423,7 @@ export const ACTION_TRAJECTORIES: Record<string, ActionTrajectory> = {
     '單腳預備',
     '髖鉸鏈前傾',
     '水平平衡',
-    { hip_L: { flexion: -5, abduction: 4, rotation: 0 }, knee_R: { flexion: 10, abduction: 0, rotation: 0 } }
+    { hip_R: { flexion: 10, abduction: 4, rotation: 0 }, knee_R: { flexion: 12, abduction: 0, rotation: 0 }, ankle_R: { flexion: -2, abduction: 0, rotation: 0 }, hip_L: { flexion: -8, abduction: 4, rotation: 0 } }
   ),
 
   // === 3. 球類與田徑專項 (10 種) ===
@@ -418,7 +442,8 @@ export const ACTION_TRAJECTORIES: Record<string, ActionTrajectory> = {
     '架拍反弓',
     '揮拍引伸',
     '殺球擊球點',
-    { lumbar: { flexion: -12, abduction: 8, rotation: -18 }, shoulder_R: { flexion: 65, abduction: 85, rotation: 65 }, elbow_R: { flexion: 95, abduction: 0, rotation: 0 }, shoulder_L: { flexion: 65, abduction: 35, rotation: 0 }, knee_L: { flexion: 35, abduction: 0, rotation: 0 }, knee_R: { flexion: 45, abduction: 0, rotation: 0 } }
+    { lumbar: { flexion: -12, abduction: 8, rotation: -18 }, shoulder_R: { flexion: 55, abduction: 75, rotation: 45 }, elbow_R: { flexion: 95, abduction: 0, rotation: -90 }, shoulder_L: { flexion: 65, abduction: 35, rotation: 0 }, elbow_L: { flexion: 60, abduction: 0, rotation: -90 }, hip_L: { flexion: 15, abduction: 0, rotation: 0 }, hip_R: { flexion: 18, abduction: 0, rotation: 0 }, knee_L: { flexion: 35, abduction: 0, rotation: 0 }, knee_R: { flexion: 45, abduction: 0, rotation: 0 }, ankle_L: { flexion: -10, abduction: 0, rotation: 0 }, ankle_R: { flexion: -10, abduction: 0, rotation: 0 } },
+    { lumbar: { flexion: -14, abduction: 8, rotation: -2 }, shoulder_R: { flexion: 108, abduction: 35, rotation: 10 }, elbow_R: { flexion: 60, abduction: 0, rotation: -90 }, shoulder_L: { flexion: 50, abduction: 38, rotation: 0 }, elbow_L: { flexion: 60, abduction: 0, rotation: -90 }, hip_L: { flexion: 16, abduction: 0, rotation: 0 }, hip_R: { flexion: 20, abduction: 0, rotation: 0 }, knee_L: { flexion: 40, abduction: 0, rotation: 0 }, knee_R: { flexion: 50, abduction: 0, rotation: 0 }, ankle_L: { flexion: -12, abduction: 0, rotation: 0 }, ankle_R: { flexion: -12, abduction: 0, rotation: 0 } }
   ),
   tennis_forehand_swing: makeTraj(
     'tennis_forehand_swing',
@@ -426,7 +451,7 @@ export const ACTION_TRAJECTORIES: Record<string, ActionTrajectory> = {
     '引拍蓄力',
     '轉髖引拍',
     '迎前擊球',
-    { lumbar: { flexion: 10, abduction: 0, rotation: -22 }, thorax: { flexion: 5, abduction: 0, rotation: -18 }, shoulder_R: { flexion: -15, abduction: 55, rotation: 40 }, elbow_R: { flexion: 55, abduction: 0, rotation: 0 }, hip_L: { flexion: 25, abduction: 12, rotation: 0 }, knee_L: { flexion: 30, abduction: 0, rotation: 0 }, hip_R: { flexion: 25, abduction: 12, rotation: 0 }, knee_R: { flexion: 30, abduction: 0, rotation: 0 } }
+    { lumbar: { flexion: 10, abduction: 0, rotation: -22 }, thorax: { flexion: 5, abduction: 0, rotation: -18 }, shoulder_R: { flexion: -15, abduction: 55, rotation: 40 }, elbow_R: { flexion: 55, abduction: 0, rotation: -90 }, hip_L: { flexion: 25, abduction: 12, rotation: 0 }, knee_L: { flexion: 30, abduction: 0, rotation: 0 }, ankle_L: { flexion: -5, abduction: 0, rotation: 0 }, hip_R: { flexion: 25, abduction: 12, rotation: 0 }, knee_R: { flexion: 30, abduction: 0, rotation: 0 }, ankle_R: { flexion: -5, abduction: 0, rotation: 0 } }
   ),
   basketball_jump_shot: makeTraj(
     'basketball_jump_shot',
@@ -434,7 +459,7 @@ export const ACTION_TRAJECTORIES: Record<string, ActionTrajectory> = {
     '屈膝舉球',
     '起跳推舉',
     '壓腕出手',
-    { shoulder_R: { flexion: 55, abduction: 15, rotation: 25 }, elbow_R: { flexion: 95, abduction: 0, rotation: -165 }, wrist_R: { flexion: -25, abduction: 0, rotation: 0 }, shoulder_L: { flexion: 55, abduction: 18, rotation: 0 }, elbow_L: { flexion: 90, abduction: 0, rotation: -90 }, hip_L: { flexion: 35, abduction: 0, rotation: 0 }, knee_L: { flexion: 45, abduction: 0, rotation: 0 }, hip_R: { flexion: 35, abduction: 0, rotation: 0 }, knee_R: { flexion: 45, abduction: 0, rotation: 0 } }
+    { shoulder_R: { flexion: 55, abduction: 15, rotation: 25 }, elbow_R: { flexion: 95, abduction: 0, rotation: -165 }, wrist_R: { flexion: -25, abduction: 0, rotation: 0 }, shoulder_L: { flexion: 55, abduction: 18, rotation: 0 }, elbow_L: { flexion: 90, abduction: 0, rotation: -90 }, hip_L: { flexion: 35, abduction: 0, rotation: 0 }, knee_L: { flexion: 45, abduction: 0, rotation: 0 }, ankle_L: { flexion: -10, abduction: 0, rotation: 0 }, hip_R: { flexion: 35, abduction: 0, rotation: 0 }, knee_R: { flexion: 45, abduction: 0, rotation: 0 }, ankle_R: { flexion: -10, abduction: 0, rotation: 0 } }
   ),
   soccer_kick_windup: makeTraj(
     'soccer_kick_windup',
@@ -442,7 +467,7 @@ export const ACTION_TRAJECTORIES: Record<string, ActionTrajectory> = {
     '助跑站立',
     '單腳支撐',
     '後擺蓄力',
-    { hip_L: { flexion: 12, abduction: 6, rotation: 0 }, knee_L: { flexion: 15, abduction: 0, rotation: 0 } }
+    { hip_L: { flexion: 12, abduction: 6, rotation: 0 }, knee_L: { flexion: 15, abduction: 0, rotation: 0 }, ankle_L: { flexion: -3, abduction: 0, rotation: 0 } }
   ),
   sprint_drive_phase: makeTraj(
     'sprint_drive_phase',
@@ -450,7 +475,7 @@ export const ACTION_TRAJECTORIES: Record<string, ActionTrajectory> = {
     '後蹬預備',
     '重心前移',
     '高抬腿頂峰',
-    { pelvis: { flexion: 14, abduction: 0, rotation: 0 }, hip_L: { flexion: 20, abduction: 0, rotation: 0 }, knee_L: { flexion: 30, abduction: 0, rotation: 0 }, hip_R: { flexion: -10, abduction: 0, rotation: 0 }, knee_R: { flexion: 35, abduction: 0, rotation: 0 }, shoulder_L: { flexion: -20, abduction: 10, rotation: 0 }, elbow_L: { flexion: 95, abduction: 0, rotation: -90 }, shoulder_R: { flexion: 35, abduction: 10, rotation: 0 }, elbow_R: { flexion: 95, abduction: 0, rotation: -90 } }
+    { pelvis: { flexion: 14, abduction: 0, rotation: 0 }, hip_L: { flexion: 20, abduction: 0, rotation: 0 }, knee_L: { flexion: 30, abduction: 0, rotation: 0 }, ankle_L: { flexion: -5, abduction: 0, rotation: 0 }, hip_R: { flexion: -10, abduction: 0, rotation: 0 }, knee_R: { flexion: 35, abduction: 0, rotation: 0 }, ankle_R: { flexion: 20, abduction: 0, rotation: 0 }, shoulder_L: { flexion: -20, abduction: 10, rotation: 0 }, elbow_L: { flexion: 95, abduction: 0, rotation: -90 }, shoulder_R: { flexion: 35, abduction: 10, rotation: 0 }, elbow_R: { flexion: 95, abduction: 0, rotation: -90 } }
   ),
   volleyball_block_jump: makeTraj(
     'volleyball_block_jump',
@@ -458,7 +483,8 @@ export const ACTION_TRAJECTORIES: Record<string, ActionTrajectory> = {
     '下蹲蓄力',
     '蹬地展臂',
     '空中攔網',
-    { hip_L: { flexion: 55, abduction: 10, rotation: 0 }, hip_R: { flexion: 55, abduction: 10, rotation: 0 }, knee_L: { flexion: 75, abduction: 0, rotation: 0 }, knee_R: { flexion: 75, abduction: 0, rotation: 0 }, shoulder_L: { flexion: -25, abduction: 15, rotation: 0 }, shoulder_R: { flexion: -25, abduction: 15, rotation: 0 }, elbow_L: { flexion: 35, abduction: 0, rotation: -165 }, elbow_R: { flexion: 35, abduction: 0, rotation: -165 } }
+    { hip_L: { flexion: 55, abduction: 10, rotation: 0 }, hip_R: { flexion: 55, abduction: 10, rotation: 0 }, knee_L: { flexion: 75, abduction: 0, rotation: 0 }, knee_R: { flexion: 75, abduction: 0, rotation: 0 }, ankle_L: { flexion: -20, abduction: 0, rotation: 0 }, ankle_R: { flexion: -20, abduction: 0, rotation: 0 }, shoulder_L: { flexion: -10, abduction: 15, rotation: 0 }, shoulder_R: { flexion: -10, abduction: 15, rotation: 0 }, elbow_L: { flexion: 35, abduction: 0, rotation: -165 }, elbow_R: { flexion: 35, abduction: 0, rotation: -165 } },
+    { hip_L: { flexion: 25, abduction: 5, rotation: 0 }, hip_R: { flexion: 25, abduction: 5, rotation: 0 }, knee_L: { flexion: 35, abduction: 0, rotation: 0 }, knee_R: { flexion: 35, abduction: 0, rotation: 0 }, ankle_L: { flexion: 10, abduction: 0, rotation: 0 }, ankle_R: { flexion: 10, abduction: 0, rotation: 0 }, shoulder_L: { flexion: 78, abduction: 4, rotation: 0 }, shoulder_R: { flexion: 78, abduction: 4, rotation: 0 }, elbow_L: { flexion: 24, abduction: 0, rotation: -165 }, elbow_R: { flexion: 24, abduction: 0, rotation: -165 } }
   ),
   golf_downswing_impact: makeTraj(
     'golf_downswing_impact',
@@ -474,7 +500,7 @@ export const ACTION_TRAJECTORIES: Record<string, ActionTrajectory> = {
     '抱架預備',
     '蹬轉送肩',
     '直拳延伸',
-    { lumbar: { flexion: 8, abduction: 0, rotation: 10 }, thorax: { flexion: 6, abduction: 0, rotation: 8 }, shoulder_L: { flexion: 55, abduction: 25, rotation: 0 }, elbow_L: { flexion: 115, abduction: 0, rotation: -90 }, shoulder_R: { flexion: 50, abduction: 20, rotation: 0 }, elbow_R: { flexion: 115, abduction: 0, rotation: -90 }, hip_L: { flexion: 20, abduction: 10, rotation: 0 }, knee_L: { flexion: 22, abduction: 0, rotation: 0 } }
+    { lumbar: { flexion: 8, abduction: 0, rotation: 10 }, thorax: { flexion: 6, abduction: 0, rotation: 8 }, shoulder_L: { flexion: 55, abduction: 25, rotation: 0 }, elbow_L: { flexion: 115, abduction: 0, rotation: -90 }, shoulder_R: { flexion: 50, abduction: 20, rotation: 0 }, elbow_R: { flexion: 115, abduction: 0, rotation: -90 }, hip_L: { flexion: 20, abduction: 10, rotation: 0 }, knee_L: { flexion: 22, abduction: 0, rotation: 0 }, ankle_L: { flexion: -2, abduction: 0, rotation: 0 } }
   ),
   freestyle_swim_catch: makeTraj(
     'freestyle_swim_catch',
@@ -482,7 +508,7 @@ export const ACTION_TRAJECTORIES: Record<string, ActionTrajectory> = {
     '前伸入水',
     '曲腕抓水',
     '高肘抱水',
-    { pelvis: { flexion: 88, abduction: 0, rotation: 15 }, shoulder_R: { flexion: 168, abduction: 15, rotation: 0 }, elbow_R: { flexion: 10, abduction: 0, rotation: -155 }, shoulder_L: { flexion: -20, abduction: 15, rotation: 0 }, elbow_L: { flexion: 25, abduction: 0, rotation: -90 } }
+    { pelvis: { flexion: 88, abduction: 0, rotation: 15 }, shoulder_R: { flexion: 168, abduction: -8, rotation: 0 }, elbow_R: { flexion: 10, abduction: 0, rotation: -155 }, shoulder_L: { flexion: -20, abduction: 15, rotation: 0 }, elbow_L: { flexion: 25, abduction: 0, rotation: -90 } }
   ),
 
   // === 4. 伸展、瑜珈與活動度 (9 種) ===
@@ -492,7 +518,8 @@ export const ACTION_TRAJECTORIES: Record<string, ActionTrajectory> = {
     '直立吸氣',
     '半前彎',
     '深度前彎',
-    {}
+    {},
+    { pelvis: { flexion: 30, abduction: 0, rotation: 0 }, lumbar: { flexion: 18, abduction: 0, rotation: 0 }, thorax: { flexion: 8, abduction: 0, rotation: 0 }, hip_L: { flexion: 4, abduction: 4, rotation: 0 }, hip_R: { flexion: 4, abduction: 4, rotation: 0 }, knee_L: { flexion: 4, abduction: 0, rotation: 0 }, knee_R: { flexion: 4, abduction: 0, rotation: 0 }, shoulder_L: { flexion: 56, abduction: 5, rotation: 0 }, shoulder_R: { flexion: 56, abduction: 5, rotation: 0 } }
   ),
   kneeling_hip_flexor_stretch: makeTraj(
     'kneeling_hip_flexor_stretch',
@@ -500,7 +527,7 @@ export const ACTION_TRAJECTORIES: Record<string, ActionTrajectory> = {
     '高跪直立',
     '重心前推',
     '髂腰肌伸展',
-    { hip_L: { flexion: 85, abduction: 6, rotation: 0 }, knee_L: { flexion: 90, abduction: 0, rotation: 0 }, hip_R: { flexion: 0, abduction: 5, rotation: 0 }, knee_R: { flexion: 90, abduction: 0, rotation: 0 } }
+    { hip_L: { flexion: 85, abduction: 6, rotation: 0 }, knee_L: { flexion: 90, abduction: 0, rotation: 0 }, ankle_L: { flexion: -5, abduction: 0, rotation: 0 }, hip_R: { flexion: 0, abduction: 5, rotation: 0 }, knee_R: { flexion: 90, abduction: 0, rotation: 0 }, ankle_R: { flexion: -20, abduction: 0, rotation: 0 } }
   ),
   doorway_pec_stretch: makeTraj(
     'doorway_pec_stretch',
@@ -524,7 +551,7 @@ export const ACTION_TRAJECTORIES: Record<string, ActionTrajectory> = {
     '四足跪姿',
     '臀部後坐',
     '嬰兒式',
-    { pelvis: { flexion: 85, abduction: 0, rotation: 0 }, hip_L: { flexion: 90, abduction: 15, rotation: 0 }, hip_R: { flexion: 90, abduction: 15, rotation: 0 }, knee_L: { flexion: 95, abduction: 0, rotation: 0 }, knee_R: { flexion: 95, abduction: 0, rotation: 0 }, shoulder_L: { flexion: 90, abduction: 15, rotation: 0 }, shoulder_R: { flexion: 90, abduction: 15, rotation: 0 }, elbow_L: { flexion: 10, abduction: 0, rotation: -165 }, elbow_R: { flexion: 10, abduction: 0, rotation: -165 } }
+    { pelvis: { flexion: 80, abduction: 0, rotation: 0 }, hip_L: { flexion: 90, abduction: 15, rotation: 0 }, hip_R: { flexion: 90, abduction: 15, rotation: 0 }, knee_L: { flexion: 95, abduction: 0, rotation: 0 }, knee_R: { flexion: 95, abduction: 0, rotation: 0 }, ankle_L: { flexion: -10, abduction: 0, rotation: 0 }, ankle_R: { flexion: -10, abduction: 0, rotation: 0 }, shoulder_L: { flexion: 78, abduction: 10, rotation: 0 }, shoulder_R: { flexion: 78, abduction: 10, rotation: 0 }, elbow_L: { flexion: 10, abduction: 0, rotation: -165 }, elbow_R: { flexion: 10, abduction: 0, rotation: -165 }, wrist_L: { flexion: -70, abduction: 0, rotation: 0 }, wrist_R: { flexion: -70, abduction: 0, rotation: 0 } }
   ),
   warrior_two: makeTraj(
     'warrior_two',
@@ -532,7 +559,7 @@ export const ACTION_TRAJECTORIES: Record<string, ActionTrajectory> = {
     '寬站展臂',
     '轉頭下蹲',
     '戰士二式',
-    { shoulder_L: { flexion: 0, abduction: 90, rotation: 0 }, shoulder_R: { flexion: 0, abduction: 90, rotation: 0 }, hip_L: { flexion: 5, abduction: 35, rotation: 0 }, hip_R: { flexion: 10, abduction: 35, rotation: 15 }, neck: { flexion: 0, abduction: 0, rotation: -45 } }
+    { shoulder_L: { flexion: 0, abduction: 90, rotation: 0 }, shoulder_R: { flexion: 0, abduction: 90, rotation: 0 }, elbow_L: { flexion: 5, abduction: 0, rotation: -90 }, elbow_R: { flexion: 5, abduction: 0, rotation: -90 }, hip_L: { flexion: 5, abduction: 35, rotation: 0 }, ankle_L: { flexion: 5, abduction: 0, rotation: 0 }, hip_R: { flexion: 10, abduction: 35, rotation: 15 }, neck: { flexion: 0, abduction: 0, rotation: -45 } }
   ),
   asian_deep_squat: makeTraj(
     'asian_deep_squat',
@@ -540,7 +567,8 @@ export const ACTION_TRAJECTORIES: Record<string, ActionTrajectory> = {
     '站立平舉',
     '中段下蹲',
     '全蹲底端',
-    { shoulder_L: { flexion: 65, abduction: 10, rotation: 0 }, shoulder_R: { flexion: 65, abduction: 10, rotation: 0 } }
+    { shoulder_L: { flexion: 65, abduction: 10, rotation: 0 }, shoulder_R: { flexion: 65, abduction: 10, rotation: 0 } },
+    { pelvis: { flexion: 10, abduction: 0, rotation: 0 }, lumbar: { flexion: 6, abduction: 0, rotation: 0 }, hip_L: { flexion: 54, abduction: 18, rotation: 6 }, hip_R: { flexion: 54, abduction: 18, rotation: 6 }, knee_L: { flexion: 64, abduction: 0, rotation: 0 }, knee_R: { flexion: 64, abduction: 0, rotation: 0 }, ankle_L: { flexion: -10, abduction: 0, rotation: 0 }, ankle_R: { flexion: -10, abduction: 0, rotation: 0 }, shoulder_L: { flexion: 65, abduction: 10, rotation: 0 }, shoulder_R: { flexion: 65, abduction: 10, rotation: 0 } }
   ),
   neck_lateral_stretch: makeTraj(
     'neck_lateral_stretch',
@@ -548,7 +576,7 @@ export const ACTION_TRAJECTORIES: Record<string, ActionTrajectory> = {
     '正坐抬手',
     '輕拉側彎',
     '斜方肌伸展',
-    { shoulder_L: { flexion: 95, abduction: 45, rotation: 0 }, elbow_L: { flexion: 85, abduction: 0, rotation: 0 } }
+    { shoulder_L: { flexion: 55, abduction: 35, rotation: 20 }, elbow_L: { flexion: 85, abduction: 0, rotation: -90 } }
   ),
   overhead_lat_side_bend: makeTraj(
     'overhead_lat_side_bend',
@@ -556,7 +584,7 @@ export const ACTION_TRAJECTORIES: Record<string, ActionTrajectory> = {
     '單臂高舉',
     '側彎啟動',
     '背闊肌拉伸',
-    { shoulder_R: { flexion: 168, abduction: 15, rotation: 0 } }
+    { shoulder_R: { flexion: 168, abduction: -8, rotation: 0 } }
   ),
 
   // === 5. 日常姿勢與常見工傷 (8 種) ===
@@ -590,7 +618,8 @@ export const ACTION_TRAJECTORIES: Record<string, ActionTrajectory> = {
     '持物預備',
     '舉臂上伸',
     '高處取物',
-    { shoulder_R: { flexion: 45, abduction: 12, rotation: 0 }, elbow_R: { flexion: 75, abduction: 0, rotation: -165 } }
+    { shoulder_R: { flexion: 45, abduction: 12, rotation: 0 }, elbow_R: { flexion: 75, abduction: 0, rotation: -165 } },
+    { lumbar: { flexion: -6, abduction: 0, rotation: 0 }, shoulder_R: { flexion: 108, abduction: 4, rotation: 0 }, elbow_R: { flexion: 42, abduction: 0, rotation: -165 } }
   ),
   bent_over_child_lift: makeTraj(
     'bent_over_child_lift',
@@ -606,7 +635,7 @@ export const ACTION_TRAJECTORIES: Record<string, ActionTrajectory> = {
     '端正坐姿',
     '胸椎微駝',
     '圓肩前引',
-    { shoulder_L: { flexion: 25, abduction: 12, rotation: 0 }, elbow_L: { flexion: 88, abduction: 0, rotation: -165 }, shoulder_R: { flexion: 25, abduction: 12, rotation: 0 }, elbow_R: { flexion: 88, abduction: 0, rotation: -165 }, hip_L: { flexion: 88, abduction: 8, rotation: 0 }, knee_L: { flexion: 90, abduction: 0, rotation: 0 }, hip_R: { flexion: 88, abduction: 8, rotation: 0 }, knee_R: { flexion: 90, abduction: 0, rotation: 0 } }
+    { shoulder_L: { flexion: 25, abduction: 12, rotation: 0 }, elbow_L: { flexion: 88, abduction: 0, rotation: -165 }, shoulder_R: { flexion: 25, abduction: 12, rotation: 0 }, elbow_R: { flexion: 88, abduction: 0, rotation: -165 }, hip_L: { flexion: 88, abduction: 8, rotation: 0 }, knee_L: { flexion: 90, abduction: 0, rotation: 0 }, ankle_L: { flexion: -2, abduction: 0, rotation: 0 }, hip_R: { flexion: 88, abduction: 8, rotation: 0 }, knee_R: { flexion: 90, abduction: 0, rotation: 0 }, ankle_R: { flexion: -2, abduction: 0, rotation: 0 } }
   ),
   foosh_wrist_impact: makeTraj(
     'foosh_wrist_impact',
