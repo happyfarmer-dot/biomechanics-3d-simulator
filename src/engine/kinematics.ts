@@ -473,3 +473,59 @@ export function computeClavicleWorldState(
   };
 }
 
+/**
+ * Computes progressive forearm pronation/supination state between elbow hinge (fraction = 0, ulna)
+ * and distal forearm / wrist entry (fraction = 1.0, full elbow.rotation).
+ */
+export function computeForearmTwistState(
+  side: 'L' | 'R',
+  pose: PoseMap,
+  kinematics: KinematicsResult,
+  fraction: number,
+  elbowRestPos?: Vec3,
+  wristRestPos?: Vec3
+): { worldPosition: Vec3; worldQuaternion: Quat; restPosition: Vec3 } {
+  const shId: JointId = side === 'L' ? 'shoulder_L' : 'shoulder_R';
+  const elId: JointId = side === 'L' ? 'elbow_L' : 'elbow_R';
+  const wrId: JointId = side === 'L' ? 'wrist_L' : 'wrist_R';
+
+  const shState = kinematics.joints[shId];
+  const elState = kinematics.joints[elId];
+  const wrState = kinematics.joints[wrId];
+  const elAngles = pose[elId] ?? { flexion: 0, abduction: 0, rotation: 0 };
+
+  const t = Math.max(0, Math.min(1, fraction));
+  const twistEuler = anatomicalToEuler(elId, {
+    flexion: elAngles.flexion,
+    abduction: elAngles.abduction,
+    rotation: elAngles.rotation * t,
+  });
+
+  const shQuat = new Quaternion(...shState.worldQuaternion);
+  const twistQuat = localEulerToQuaternion(twistEuler);
+  const worldQuat = shQuat.multiply(twistQuat);
+
+  const elPos = elState.worldPosition;
+  const wrPos = wrState.worldPosition;
+  const worldPosition: Vec3 = [
+    elPos[0] + (wrPos[0] - elPos[0]) * t,
+    elPos[1] + (wrPos[1] - elPos[1]) * t,
+    elPos[2] + (wrPos[2] - elPos[2]) * t,
+  ];
+
+  const elR = elbowRestPos ?? [0, 0, 0];
+  const wrR = wristRestPos ?? elR;
+  const restPosition: Vec3 = [
+    elR[0] + (wrR[0] - elR[0]) * t,
+    elR[1] + (wrR[1] - elR[1]) * t,
+    elR[2] + (wrR[2] - elR[2]) * t,
+  ];
+
+  return {
+    worldPosition,
+    worldQuaternion: [worldQuat.x, worldQuat.y, worldQuat.z, worldQuat.w],
+    restPosition,
+  };
+}
+
+

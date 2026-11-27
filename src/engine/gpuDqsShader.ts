@@ -1,11 +1,15 @@
 import { Material, Quaternion, Vector3, Vector4 } from 'three';
 import { JOINT_ORDER } from '../data/skeletonConfig';
-import { computeClavicleWorldState } from './kinematics';
+import { computeClavicleWorldState, computeForearmTwistState } from './kinematics';
 import type { JointId, KinematicsResult, PoseMap, Vec3 } from '../types/biomechanics';
 
-export const MAX_DQS_BONES = 19; // 17 standard joints + clavicle_L (17) + clavicle_R (18)
+export const MAX_DQS_BONES = 23; // 17 joints + clavicle L/R (17,18) + elbow_hinge L/R (19,20) + forearm_mid L/R (21,22)
 export const CLAVICLE_L_BONE_INDEX = 17;
 export const CLAVICLE_R_BONE_INDEX = 18;
+export const ELBOW_HINGE_L_BONE_INDEX = 19;
+export const ELBOW_HINGE_R_BONE_INDEX = 20;
+export const FOREARM_MID_L_BONE_INDEX = 21;
+export const FOREARM_MID_R_BONE_INDEX = 22;
 
 export interface GpuDqsUniforms {
   uBoneDqReal: { value: Vector4[] };
@@ -100,6 +104,23 @@ export function updateGpuDqsUniforms(
   );
   _wq.set(...clavR.worldQuaternion);
   writeDqToUniform(CLAVICLE_R_BONE_INDEX, _wq, clavR.worldPosition, clavR.restPosition, hScale, realArr, dualArr);
+
+  // Progressive forearm pronation virtual bones: 19/20 elbow hinges (0% twist), 21/22 mid forearms (50% twist)
+  const hingeL = computeForearmTwistState('L', pose, kinematics, 0, restPositions.elbow_L, restPositions.wrist_L);
+  _wq.set(...hingeL.worldQuaternion);
+  writeDqToUniform(ELBOW_HINGE_L_BONE_INDEX, _wq, hingeL.worldPosition, hingeL.restPosition, hScale, realArr, dualArr);
+
+  const hingeR = computeForearmTwistState('R', pose, kinematics, 0, restPositions.elbow_R, restPositions.wrist_R);
+  _wq.set(...hingeR.worldQuaternion);
+  writeDqToUniform(ELBOW_HINGE_R_BONE_INDEX, _wq, hingeR.worldPosition, hingeR.restPosition, hScale, realArr, dualArr);
+
+  const midL = computeForearmTwistState('L', pose, kinematics, 0.5, restPositions.elbow_L, restPositions.wrist_L);
+  _wq.set(...midL.worldQuaternion);
+  writeDqToUniform(FOREARM_MID_L_BONE_INDEX, _wq, midL.worldPosition, midL.restPosition, hScale, realArr, dualArr);
+
+  const midR = computeForearmTwistState('R', pose, kinematics, 0.5, restPositions.elbow_R, restPositions.wrist_R);
+  _wq.set(...midR.worldQuaternion);
+  writeDqToUniform(FOREARM_MID_R_BONE_INDEX, _wq, midR.worldPosition, midR.restPosition, hScale, realArr, dualArr);
 }
 
 export function applyGpuDqsToMaterial(

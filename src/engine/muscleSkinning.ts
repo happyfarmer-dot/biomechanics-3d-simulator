@@ -2,7 +2,7 @@ import { Box3, BufferGeometry, Float32BufferAttribute, Mesh, Quaternion, Vector3
 import { createNeutralPose, DEFAULT_HEIGHT_M } from '../data/skeletonConfig';
 import type { JointId, KinematicsResult, PoseMap, Vec3 } from '../types/biomechanics';
 import type { CalibrationResult } from './calibrateSkeleton';
-import { computeClavicleWorldState } from './kinematics';
+import { computeClavicleWorldState, computeForearmTwistState } from './kinematics';
 
 export type LimbZone = 'arm_L' | 'arm_R' | 'leg_L' | 'leg_R' | 'head_neck' | 'torso';
 
@@ -43,7 +43,11 @@ export const JOINT_TO_INDEX: Record<JointId, number> = Object.fromEntries(
 
 export const CLAVICLE_L_INDEX = 17;
 export const CLAVICLE_R_INDEX = 18;
-export const TOTAL_SKIN_BONES = 19;
+export const ELBOW_HINGE_L_INDEX = 19;
+export const ELBOW_HINGE_R_INDEX = 20;
+export const FOREARM_MID_L_INDEX = 21;
+export const FOREARM_MID_R_INDEX = 22;
+export const TOTAL_SKIN_BONES = 23;
 
 function smoothstep(edge0: number, edge1: number, x: number): number {
   if (Math.abs(edge1 - edge0) < 1e-6) return x >= edge1 ? 1 : 0;
@@ -426,11 +430,11 @@ function computeShoulderAxillaWeightField(
 
   // 1. Deltoid: C1 continuous 3D projection from acromion/clavicle (scapula node) to deltoid tuberosity (humerus)
   if (meshNameLower.includes('deltoid')) {
-    const acromionX = sh[0] * 0.85;
-    const acromionY = sh[1] + 0.045;
+    const acromionX = sh[0] * 0.82;
+    const acromionY = sh[1] + 0.05;
     const acromionZ = sh[2];
     const tuberosityX = sh[0] * 1.12;
-    const tuberosityY = sh[1] - 0.11;
+    const tuberosityY = sh[1] - 0.14;
     const tuberosityZ = sh[2];
     const dx = tuberosityX - acromionX;
     const dy = tuberosityY - acromionY;
@@ -445,15 +449,15 @@ function computeShoulderAxillaWeightField(
       jBIdx: JOINT_TO_INDEX[shId],
       jALogical: 'thorax',
       jBLogical: shId,
-      wB: smoothstep(0.05, 0.85, t),
+      wB: smoothstep(0.04, 0.92, t),
     };
   }
 
   // 2. Rotator cuff (supraspinatus, infraspinatus, subscapularis, teres minor):
   // Driven between scapula (clavicle_L/R) and humerus (shoulder_L/R) along medial-to-humeral-head axis
   if (ROTATOR_CUFF_KEYWORDS.some((kw) => meshNameLower.includes(kw))) {
-    const scapX = sh[0] * 0.45;
-    const scapY = sh[1] - 0.01;
+    const scapX = sh[0] * 0.42;
+    const scapY = sh[1] - 0.015;
     const scapZ = sh[2] - 0.03;
     const dx = sh[0] - scapX;
     const dy = sh[1] - scapY;
@@ -468,13 +472,14 @@ function computeShoulderAxillaWeightField(
       jBIdx: JOINT_TO_INDEX[shId],
       jALogical: 'thorax',
       jBLogical: shId,
-      wB: smoothstep(0.25, 0.92, t),
+      wB: smoothstep(0.22, 0.92, t),
     };
   }
 
-  // 3. Unified 3D continuous Gaussian humerus-axis field for thoracohumeral / axilla muscles
-  const hx = (sh[0] + el[0]) * 0.5;
-  const hy = (sh[1] + el[1]) * 0.5;
+  // 3. Unified wider 3D continuous Gaussian humerus-axis field for thoracohumeral / axilla muscles
+  // Widened 11.5 cm falloff prevents abrupt creases/tearing in pectorals & lats during overhead lifts
+  const hx = (sh[0] + el[0]) * 0.55;
+  const hy = (sh[1] + el[1]) * 0.48;
   const hz = (sh[2] + el[2]) * 0.5;
   const abx = hx - sh[0];
   const aby = hy - sh[1];
@@ -489,9 +494,9 @@ function computeShoulderAxillaWeightField(
   const cz = sh[2] + abz * tSeg;
   const dHumerus = Math.hypot(vx - cx, vy - cy, vz - cz);
   const wArm =
-    Math.exp(-Math.pow(dHumerus / 0.065, 2)) *
-    smoothstep(sh[1] - 0.16, sh[1] - 0.02, vy) *
-    smoothstep(sx * 0.42, sx * 0.88, absX);
+    Math.exp(-Math.pow(dHumerus / 0.115, 2)) *
+    smoothstep(sh[1] - 0.24, sh[1] - 0.01, vy) *
+    smoothstep(sx * 0.28, sx * 0.90, absX);
   return makePair('thorax', shId, wArm);
 }
 
@@ -504,7 +509,7 @@ function computeVertexJointPairAndWeight(
   meshNameLower: string = '',
   isMedialOriginMesh: boolean = false
 ): VertexBonePair {
-  const TRANSITION_M = 0.055; // strict ±5.5cm transition band for knee & elbow
+  const TRANSITION_M = 0.055; // strict ±5.5cm transition band for knee & elbow hinge
   const DISTAL_TRANSITION_M = 0.025; // strict ±2.5cm transition band for wrist & ankle
 
   if (zone === 'leg_L' || zone === 'leg_R') {
@@ -522,9 +527,9 @@ function computeVertexJointPairAndWeight(
       return makePair(kneeId, ankleId, 1.0);
     }
 
-    // 1. Pelvic-Hip gluteal origin pinning: above hipY + 0.03m is 100% pelvis
-    if (vy >= hipY - 0.12) {
-      const wHip = smoothstep(hipY + 0.03, hipY - 0.12, vy);
+    // 1. Pelvic-Hip gluteal origin pinning with smooth 19cm transition
+    if (vy >= hipY - 0.15) {
+      const wHip = smoothstep(hipY + 0.04, hipY - 0.15, vy);
       return makePair('pelvis', hipId, wHip);
     }
 
@@ -544,6 +549,8 @@ function computeVertexJointPairAndWeight(
     const shId = `shoulder_${side}` as JointId;
     const elId = `elbow_${side}` as JointId;
     const wrId = `wrist_${side}` as JointId;
+    const elbowHingeIdx = side === 'L' ? ELBOW_HINGE_L_INDEX : ELBOW_HINGE_R_INDEX;
+    const forearmMidIdx = side === 'L' ? FOREARM_MID_L_INDEX : FOREARM_MID_R_INDEX;
 
     const sh = r[shId];
     const el = r[elId];
@@ -566,13 +573,42 @@ function computeVertexJointPairAndWeight(
       return computeShoulderAxillaWeightField(vx, vy, vz, side, r, meshNameLower);
     }
 
-    // 2. Upper arm down to Elbow transition (strict ±5.5cm around el.y)
+    // 2. Upper arm into pure flexion/abduction elbow hinge (zero axial twist at elbow crease)
     if (vy >= el[1] - TRANSITION_M) {
-      const wElbow = smoothstep(el[1] + TRANSITION_M, el[1] - TRANSITION_M, vy);
-      return makePair(shId, elId, wElbow);
+      const wHinge = smoothstep(el[1] + TRANSITION_M, el[1] - TRANSITION_M, vy);
+      return {
+        jAIdx: JOINT_TO_INDEX[shId],
+        jBIdx: elbowHingeIdx,
+        jALogical: shId,
+        jBLogical: elId,
+        wB: wHinge,
+      };
     }
 
-    // 3. Forearm down to Wrist + Hand virtual segment (strict ±2.5cm around wr.y, no ballooning)
+    // 3. Progressive forearm pronation/supination: 0% at elbow_hinge -> 50% at forearm_mid -> 100% at wrist entry
+    const midForearmY = (el[1] - TRANSITION_M + wr[1] + DISTAL_TRANSITION_M) * 0.5;
+    if (vy >= midForearmY) {
+      const wMid = smoothstep(el[1] - TRANSITION_M, midForearmY, vy);
+      return {
+        jAIdx: elbowHingeIdx,
+        jBIdx: forearmMidIdx,
+        jALogical: elId,
+        jBLogical: elId,
+        wB: wMid,
+      };
+    }
+    if (vy >= wr[1] + DISTAL_TRANSITION_M) {
+      const wDistal = smoothstep(midForearmY, wr[1] + DISTAL_TRANSITION_M, vy);
+      return {
+        jAIdx: forearmMidIdx,
+        jBIdx: JOINT_TO_INDEX[elId],
+        jALogical: elId,
+        jBLogical: elId,
+        wB: wDistal,
+      };
+    }
+
+    // 4. Wrist + Hand virtual segment (strict ±2.5cm around wr.y)
     const wWrist = smoothstep(wr[1] + DISTAL_TRANSITION_M, wr[1] - DISTAL_TRANSITION_M, vy);
     return makePair(elId, wrId, wWrist);
   }
@@ -601,7 +637,7 @@ function computeVertexJointPairAndWeight(
   const absX = Math.abs(vx);
 
   // Unified 3D shoulder-axilla field for wide chest/back/scapular muscles in torso zone
-  if (vy > lumbarY && vy > sh[1] - 0.16 && absX >= sx * 0.42) {
+  if (vy > lumbarY && vy > sh[1] - 0.24 && absX >= sx * 0.28) {
     const shPair = computeShoulderAxillaWeightField(vx, vy, vz, shSide, r, meshNameLower);
     if (shPair.wB > 1e-4) {
       return shPair;
@@ -620,10 +656,10 @@ function computeVertexJointPairAndWeight(
   }
 
   // If a torso/gluteal muscle extends below lumbar into the hip region
-  if (vy < hipY + 0.03) {
+  if (vy < hipY + 0.04) {
     const side = vx >= 0 ? 'L' : 'R';
     const hipId = `hip_${side}` as JointId;
-    const wHip = smoothstep(hipY + 0.03, hipY - 0.12, vy);
+    const wHip = smoothstep(hipY + 0.04, hipY - 0.15, vy);
     return makePair('pelvis', hipId, wHip);
   }
 
@@ -995,6 +1031,54 @@ export function buildJointDualQuaternions(
     clavR.worldQuaternion[3],
     clavR.worldPosition,
     clavR.restPosition,
+    hScale
+  );
+
+  const hingeL = computeForearmTwistState('L', pose, kinematics, 0, restJointPositions.elbow_L, restJointPositions.wrist_L);
+  writeBoneDQ(
+    ELBOW_HINGE_L_INDEX,
+    hingeL.worldQuaternion[0],
+    hingeL.worldQuaternion[1],
+    hingeL.worldQuaternion[2],
+    hingeL.worldQuaternion[3],
+    hingeL.worldPosition,
+    hingeL.restPosition,
+    hScale
+  );
+
+  const hingeR = computeForearmTwistState('R', pose, kinematics, 0, restJointPositions.elbow_R, restJointPositions.wrist_R);
+  writeBoneDQ(
+    ELBOW_HINGE_R_INDEX,
+    hingeR.worldQuaternion[0],
+    hingeR.worldQuaternion[1],
+    hingeR.worldQuaternion[2],
+    hingeR.worldQuaternion[3],
+    hingeR.worldPosition,
+    hingeR.restPosition,
+    hScale
+  );
+
+  const midL = computeForearmTwistState('L', pose, kinematics, 0.5, restJointPositions.elbow_L, restJointPositions.wrist_L);
+  writeBoneDQ(
+    FOREARM_MID_L_INDEX,
+    midL.worldQuaternion[0],
+    midL.worldQuaternion[1],
+    midL.worldQuaternion[2],
+    midL.worldQuaternion[3],
+    midL.worldPosition,
+    midL.restPosition,
+    hScale
+  );
+
+  const midR = computeForearmTwistState('R', pose, kinematics, 0.5, restJointPositions.elbow_R, restJointPositions.wrist_R);
+  writeBoneDQ(
+    FOREARM_MID_R_INDEX,
+    midR.worldQuaternion[0],
+    midR.worldQuaternion[1],
+    midR.worldQuaternion[2],
+    midR.worldQuaternion[3],
+    midR.worldPosition,
+    midR.restPosition,
     hScale
   );
 }

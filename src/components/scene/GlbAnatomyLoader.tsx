@@ -21,7 +21,7 @@ import {
   createGpuDqsUniforms,
   updateGpuDqsUniforms,
 } from '../../engine/gpuDqsShader';
-import { computeClavicleWorldState } from '../../engine/kinematics';
+import { computeClavicleWorldState, computeForearmTwistState } from '../../engine/kinematics';
 import {
   computeHandPhalanxTransforms,
   getPresetHandGripModes,
@@ -120,6 +120,7 @@ interface BoneBinding {
   mesh: Mesh;
   jointId: JointId;
   clavicleSide?: 'L' | 'R';
+  forearmRole?: { side: 'L' | 'R'; kind: 'ulna' | 'radius' };
   handKey?: string;
   localOffset: Vec3;
   modelScale: number;
@@ -292,6 +293,7 @@ function RealAnatomyModel({
         const isClavicleOrScapula =
           kind === 'bone' && CLAVICLE_SCAPULA_KEYWORDS.some((kw) => nl.includes(kw));
         let clavicleSide: 'L' | 'R' | undefined;
+        let forearmRole: { side: 'L' | 'R'; kind: 'ulna' | 'radius' } | undefined;
         let restAnchor: Vec3 = calibration.restPositions[jointId];
 
         if (isClavicleOrScapula) {
@@ -299,6 +301,27 @@ function RealAnatomyModel({
           const shRest = calibration.restPositions[`shoulder_${clavicleSide}` as JointId];
           const sign = clavicleSide === 'L' ? 1 : -1;
           restAnchor = [sign * 0.025, shRest[1] + 0.015, shRest[2] + 0.02];
+        } else if (kind === 'bone' && (nl.includes('ulna') || nl.includes('radius'))) {
+          const fSide: 'L' | 'R' = jointId.endsWith('_R')
+            ? 'R'
+            : jointId.endsWith('_L')
+              ? 'L'
+              : normX >= 0
+                ? 'L'
+                : 'R';
+          const fKind: 'ulna' | 'radius' = nl.includes('radius') ? 'radius' : 'ulna';
+          forearmRole = { side: fSide, kind: fKind };
+          const elRest = calibration.restPositions[`elbow_${fSide}` as JointId];
+          const wrRest = calibration.restPositions[`wrist_${fSide}` as JointId];
+          if (fKind === 'ulna') {
+            restAnchor = elRest;
+          } else {
+            restAnchor = [
+              elRest[0] + (wrRest[0] - elRest[0]) * 0.55,
+              elRest[1] + (wrRest[1] - elRest[1]) * 0.55,
+              elRest[2] + (wrRest[2] - elRest[2]) * 0.55,
+            ];
+          }
         }
 
         const localOffset: Vec3 = [
@@ -325,6 +348,7 @@ function RealAnatomyModel({
           mesh: cloned,
           jointId,
           clavicleSide,
+          forearmRole,
           handKey,
           localOffset,
           modelScale: s,
@@ -379,7 +403,16 @@ function RealAnatomyModel({
   const strainsRef = useRef<Float32Array>(new Float32Array(0));
   const stretchRatiosRef = useRef<Float32Array>(new Float32Array(0));
 
-  const { stretchRatios, strains, clavLState, clavRState } = useMemo(() => {
+  const {
+    stretchRatios,
+    strains,
+    clavLState,
+    clavRState,
+    ulnaLState,
+    ulnaRState,
+    radLState,
+    radRState,
+  } = useMemo(() => {
     updateGpuDqsUniforms(gpuDqsUniforms, kinematics, calibration.restPositions, hScale, pose);
     buildJointDualQuaternions(kinematics, calibration.restPositions, hScale, pose);
 
@@ -398,6 +431,25 @@ function RealAnatomyModel({
       calibration.restPositions.shoulder_R,
       calibration.restPositions.thorax,
       hScale
+    );
+
+    const ulnaL = computeForearmTwistState('L', pose, kinematics, 0);
+    const ulnaR = computeForearmTwistState('R', pose, kinematics, 0);
+    const radL = computeForearmTwistState(
+      'L',
+      pose,
+      kinematics,
+      0.55,
+      calibration.restPositions.elbow_L,
+      calibration.restPositions.wrist_L
+    );
+    const radR = computeForearmTwistState(
+      'R',
+      pose,
+      kinematics,
+      0.55,
+      calibration.restPositions.elbow_R,
+      calibration.restPositions.wrist_R
     );
 
     if (strainsRef.current.length !== muscleBindings.length) {
@@ -420,7 +472,16 @@ function RealAnatomyModel({
       ratios[i] = curLen / Math.max(m.skinned.restLength * hScale, 0.05);
     }
 
-    return { stretchRatios: ratios, strains: curStrains, clavLState: clavL, clavRState: clavR };
+    return {
+      stretchRatios: ratios,
+      strains: curStrains,
+      clavLState: clavL,
+      clavRState: clavR,
+      ulnaLState: ulnaL,
+      ulnaRState: ulnaR,
+      radLState: radL,
+      radRState: radR,
+    };
   }, [muscleBindings, kinematics, heightM, hScale, pose, calibration.restPositions, gpuDqsUniforms]);
 
   // Display metric for heatmap (geometric strain vs active tension)
@@ -541,9 +602,26 @@ function RealAnatomyModel({
 
         const clavState =
           b.clavicleSide === 'L' ? clavLState : b.clavicleSide === 'R' ? clavRState : null;
+        const forearmState = b.forearmRole
+          ? b.forearmRole.kind === 'ulna'
+            ? b.forearmRole.side === 'L'
+              ? ulnaLState
+              : ulnaRState
+            : b.forearmRole.side === 'L'
+              ? radLState
+              : radRState
+          : null;
         const j = kinematics.joints[b.jointId];
-        const worldPosition = clavState ? clavState.worldPosition : j.worldPosition;
-        const worldQuaternion = clavState ? clavState.worldQuaternion : j.worldQuaternion;
+        const worldPosition = clavState
+          ? clavState.worldPosition
+          : forearmState
+            ? forearmState.worldPosition
+            : j.worldPosition;
+        const worldQuaternion = clavState
+          ? clavState.worldQuaternion
+          : forearmState
+            ? forearmState.worldQuaternion
+            : j.worldQuaternion;
 
         const isGhosted = Boolean(activeMacroSet && !activeMacroSet.has(b.jointId));
         const material =

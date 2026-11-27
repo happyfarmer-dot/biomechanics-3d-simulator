@@ -2,11 +2,15 @@ import { Quaternion, Vector3 } from 'three';
 import { createNeutralPose, DEFAULT_HEIGHT_M } from '../data/skeletonConfig';
 import type { PoseMap } from '../types/biomechanics';
 import type { CalibrationResult } from './calibrateSkeleton';
-import { computeClavicleWorldState, computeKinematics } from './kinematics';
+import { computeClavicleWorldState, computeForearmTwistState, computeKinematics } from './kinematics';
 import {
   ALL_JOINTS,
   CLAVICLE_L_INDEX,
   CLAVICLE_R_INDEX,
+  ELBOW_HINGE_L_INDEX,
+  ELBOW_HINGE_R_INDEX,
+  FOREARM_MID_L_INDEX,
+  FOREARM_MID_R_INDEX,
   restoreRestMuscleVertices,
   updateSkinnedMuscleVertices,
   type SkinnedMuscleData,
@@ -174,6 +178,25 @@ export function runRigIntegrityCheck(
             pJoint.set(...clav.worldPosition);
             qJoint.set(...clav.worldQuaternion);
             rJ = clav.restPosition;
+          } else if (
+            jIdx === ELBOW_HINGE_L_INDEX ||
+            jIdx === ELBOW_HINGE_R_INDEX ||
+            jIdx === FOREARM_MID_L_INDEX ||
+            jIdx === FOREARM_MID_R_INDEX
+          ) {
+            const side = jIdx === ELBOW_HINGE_L_INDEX || jIdx === FOREARM_MID_L_INDEX ? 'L' : 'R';
+            const frac = jIdx === ELBOW_HINGE_L_INDEX || jIdx === ELBOW_HINGE_R_INDEX ? 0 : 0.5;
+            const fw = computeForearmTwistState(
+              side,
+              ep.pose,
+              kin,
+              frac,
+              restJoints[`elbow_${side}`],
+              restJoints[`wrist_${side}`]
+            );
+            pJoint.set(...fw.worldPosition);
+            qJoint.set(...fw.worldQuaternion);
+            rJ = fw.restPosition;
           } else {
             const jId = ALL_JOINTS[jIdx];
             const jState = kin.joints[jId];
@@ -292,7 +315,7 @@ export function runRigIntegrityCheck(
     let movedDistal = 0;
 
     for (const m of muscles) {
-      updateSkinnedMuscleVertices(m, kin, DEFAULT_HEIGHT_M, restJoints);
+      updateSkinnedMuscleVertices(m, kin, DEFAULT_HEIGHT_M, restJoints, lt.pose);
       const posAttr = m.geometry.getAttribute('position');
       const step = Math.max(1, Math.floor(m.vertexCount / 150));
 

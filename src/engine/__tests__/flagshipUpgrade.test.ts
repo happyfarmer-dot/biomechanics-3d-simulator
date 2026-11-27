@@ -1,3 +1,4 @@
+import { Quaternion } from 'three';
 import { describe, expect, it } from 'vitest';
 import { ACTION_TRAJECTORIES, interpolatePoseSlerp } from '../../data/actionTrajectories';
 import { PRESET_POSES } from '../../data/presetPoses';
@@ -6,7 +7,8 @@ import {
   computeCombinedMomentArmGeometry,
   computeMomentArmGeometry,
 } from '../../components/scene/MomentArmOverlay';
-import { computeClavicleWorldState, computeKinematics } from '../kinematics';
+import { solveTwoBoneLimbIK } from '../ikSolver';
+import { computeClavicleWorldState, computeForearmTwistState, computeKinematics } from '../kinematics';
 import {
   computeHandPhalanxTransforms,
   getPresetHandGripModes,
@@ -378,5 +380,111 @@ describe('Flagship Upgrade Suite', () => {
     const aptLoads = computeStatics(aptKin, apt.forces, { includeGravity: apt.includeGravity, bodyMassKg: 70, heightM: 1.75 });
     const aptAlerts = evaluateAllInjuries(apt.pose, aptLoads);
     expect(aptAlerts.some((a) => a.id.startsWith('composite_pelvic_tilt_lumbar_hip_stress'))).toBe(true);
+  });
+
+  it('decouples forearm pronation onto progressive virtual nodes while keeping ulna hinge untwisted', () => {
+    const pose = createNeutralPose();
+    pose.elbow_L = { flexion: 90, abduction: 0, rotation: -160 };
+    const kin = computeKinematics(pose, 1.75);
+
+    const noTwistPose = createNeutralPose();
+    noTwistPose.elbow_L = { flexion: 90, abduction: 0, rotation: 0 };
+    const noTwistKin = computeKinematics(noTwistPose, 1.75);
+
+    const hingeState = computeForearmTwistState('L', pose, kin, 0);
+    const midState = computeForearmTwistState('L', pose, kin, 0.5);
+    const radiusState = computeForearmTwistState('L', pose, kin, 0.55);
+    const fullState = computeForearmTwistState('L', pose, kin, 1.0);
+
+    // Ulna (fraction=0) matches pure elbow flexion with 0 axial pronation
+    const qHinge = new Quaternion(...hingeState.worldQuaternion);
+    const qNoTwist = new Quaternion(...noTwistKin.joints.elbow_L.worldQuaternion);
+    expect(qHinge.angleTo(qNoTwist)).toBeLessThan(1e-4);
+
+    // Mid-forearm carries ~80° twist (~half of -160°) relative to hinge
+    const qMid = new Quaternion(...midState.worldQuaternion);
+    const qRadius = new Quaternion(...radiusState.worldQuaternion);
+    const qFull = new Quaternion(...fullState.worldQuaternion);
+    expect(qHinge.angleTo(qMid) * (180 / Math.PI)).toBeCloseTo(80, 0);
+    expect(qHinge.angleTo(qRadius) * (180 / Math.PI)).toBeCloseTo(88, 0);
+    expect(qHinge.angleTo(qFull) * (180 / Math.PI)).toBeCloseTo(160, 0);
+  });
+
+  it('maintains midfoot CoM balance and flat toes across standing squat/hinge exercises and autoBalanceStanding', () => {
+    const standingBalancedIds = [
+      'barbell_squat_bottom',
+      'barbell_front_squat_bottom',
+      'asian_deep_squat',
+      'romanian_deadlift',
+      'bent_over_barbell_row',
+      'sumo_deadlift_start',
+      'conventional_deadlift_start',
+      'standing_forward_fold',
+    ];
+
+    for (const id of standingBalancedIds) {
+      const p = PRESET_POSES.find((x) => x.id === id)!;
+      const kin = computeKinematics(p.pose, 1.75, null, id);
+      let sumMZ = 0;
+      let sumM = 0;
+      for (const jId of JOINT_ORDER) {
+        const m = SKELETON_CONFIG[jId].massRatio;
+        sumMZ += m * kin.joints[jId].comWorldPosition[2];
+        sumM += m;
+      }
+      const comZ = sumMZ / sumM;
+      expect(comZ).toBeGreaterThan(-0.01);
+      expect(comZ).toBeLessThan(0.09);
+      expect(Math.abs(kin.joints.ankle_L.distalWorldPosition[1])).toBeLessThan(0.01);
+      expect(Math.abs(kin.joints.ankle_R.distalWorldPosition[1])).toBeLessThan(0.01);
+    }
+
+    // autoBalanceStanding keeps standing feet flat and pelvis CoM balanced when bending legs bilaterally
+    const store = useSimStore.getState();
+    store.resetPose();
+    store.setAutoBalanceStanding(true);
+    useSimStore.getState().setJointAngles('hip_L', { flexion: 60 });
+    useSimStore.getState().setJointAngles('hip_R', { flexion: 60 });
+    useSimStore.getState().setJointAngles('knee_L', { flexion: 80 });
+    useSimStore.getState().setJointAngles('knee_R', { flexion: 80 });
+    expect(useSimStore.getState().pose.ankle_R.flexion).toBeCloseTo(-20, 1);
+    expect(useSimStore.getState().pose.ankle_L.flexion).toBeCloseTo(-20, 1);
+    expect(useSimStore.getState().pose.pelvis.flexion).toBeGreaterThan(5);
+    const autoKin = useSimStore.getState().kinematics;
+    expect(Math.abs(autoKin.joints.ankle_R.distalWorldPosition[1])).toBeLessThan(0.005);
+    expect(Math.abs(autoKin.joints.ankle_L.distalWorldPosition[1])).toBeLessThan(0.005);
+    useSimStore.getState().resetPose();
+  });
+
+  it('reaches arbitrary forward and overhead wrist targets within 2.5cm using calibrated GLB offsets', () => {
+    const calibratedOffsets = {
+      ...Object.fromEntries(JOINT_ORDER.map((id) => [id, SKELETON_CONFIG[id].offsetRatio.map((v) => v * 1.75)])),
+      shoulder_L: [0.1887, 0.1749, -0.0283],
+      elbow_L: [0.0393, -0.2887, 0.0055],
+      wrist_L: [0.0431, -0.2549, 0.0420],
+    } as unknown as Record<keyof typeof SKELETON_CONFIG, [number, number, number]>;
+
+    const basePose = createNeutralPose();
+    const kinBase = computeKinematics(basePose, 1.75, calibratedOffsets);
+    const shPos = kinBase.joints.shoulder_L.worldPosition;
+
+    // 1. Forward bent reach
+    const forwardTarget: [number, number, number] = [shPos[0] + 0.05, shPos[1] - 0.15, shPos[2] + 0.42];
+    const forwardPatch = solveTwoBoneLimbIK('arm_L', forwardTarget, basePose, 1.75, calibratedOffsets);
+    const forwardPose = { ...basePose, ...forwardPatch };
+    const forwardKin = computeKinematics(forwardPose, 1.75, calibratedOffsets);
+    const fw = forwardKin.joints.wrist_L.worldPosition;
+    const forwardErr = Math.hypot(fw[0] - forwardTarget[0], fw[1] - forwardTarget[1], fw[2] - forwardTarget[2]);
+    expect(forwardErr).toBeLessThan(0.025);
+
+    // 2. Overhead reach (> 90 deg shoulder flexion)
+    const overheadTarget: [number, number, number] = [shPos[0] + 0.04, shPos[1] + 0.38, shPos[2] + 0.18];
+    const overPatch = solveTwoBoneLimbIK('arm_L', overheadTarget, basePose, 1.75, calibratedOffsets);
+    const overPose = { ...basePose, ...overPatch };
+    const overKin = computeKinematics(overPose, 1.75, calibratedOffsets);
+    const ow = overKin.joints.wrist_L.worldPosition;
+    const overErr = Math.hypot(ow[0] - overheadTarget[0], ow[1] - overheadTarget[1], ow[2] - overheadTarget[2]);
+    expect(overErr).toBeLessThan(0.025);
+    expect(overPose.shoulder_L.flexion).toBeGreaterThan(90);
   });
 });

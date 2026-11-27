@@ -1,5 +1,5 @@
 import { useThree } from '@react-three/fiber';
-import { useEffect, useRef } from 'react';
+import { useEffect, useRef, useState } from 'react';
 import { Plane, Raycaster, Vector2, Vector3 } from 'three';
 import { solveTwoBoneLimbIK, type LimbId } from '../../engine/ikSolver';
 import { useSimStore } from '../../store/useSimStore';
@@ -22,6 +22,7 @@ export function DirectLimbIK() {
   const setSelectedJoint = useSimStore((s) => s.setSelectedJoint);
   const applyPosePatch = useSimStore((s) => s.applyPosePatch);
 
+  const [draggingLimb, setDraggingLimb] = useState<LimbId | null>(null);
   const activeDragRef = useRef<{
     limb: LimbId;
     plane: Plane;
@@ -41,12 +42,14 @@ export function DirectLimbIK() {
       raycasterRef.current.setFromCamera(ndcRef.current, camera);
       const hit = new Vector3();
       if (raycasterRef.current.ray.intersectPlane(drag.plane, hit)) {
-        const currentPose = useSimStore.getState().pose;
+        const st = useSimStore.getState();
         const patch = solveTwoBoneLimbIK(
           drag.limb,
           [hit.x, hit.y, hit.z],
-          currentPose,
-          useSimStore.getState().heightM
+          st.pose,
+          st.heightM,
+          st.calibratedOffsets,
+          st.activePresetId
         );
         applyPosePatch(patch);
       }
@@ -55,6 +58,7 @@ export function DirectLimbIK() {
     const onPointerUp = () => {
       if (!activeDragRef.current) return;
       activeDragRef.current = null;
+      setDraggingLimb(null);
       setIsDraggingGizmo(false);
     };
 
@@ -76,39 +80,53 @@ export function DirectLimbIK() {
     <group name="direct-limb-ik">
       {LIMB_HANDLES.map(({ limb, jointId }) => {
         const pos = kinematics.joints[jointId].worldPosition;
+        const isActive = draggingLimb === limb;
         return (
-          <mesh
-            key={limb}
-            position={pos}
-            renderOrder={999}
-            onPointerDown={(e) => {
-              e.stopPropagation();
-              const camDir = new Vector3();
-              camera.getWorldDirection(camDir);
-              const plane = new Plane().setFromNormalAndCoplanarPoint(
-                camDir.negate(),
-                new Vector3(...pos)
-              );
-              activeDragRef.current = { limb, plane };
-              setIsDraggingGizmo(true);
-              setSelectedJoint(
-                (limb.startsWith('arm_')
-                  ? `shoulder_${limb.endsWith('_L') ? 'L' : 'R'}`
-                  : `hip_${limb.endsWith('_L') ? 'L' : 'R'}`) as JointId
-              );
-            }}
-          >
-            <sphereGeometry args={[0.024 * scale, 16, 16]} />
-            <meshStandardMaterial
-              color="#38bdf8"
-              emissive="#0284c7"
-              emissiveIntensity={0.75}
-              transparent
-              opacity={0.78}
-              depthTest={false}
-              depthWrite={false}
-            />
-          </mesh>
+          <group key={limb} position={pos}>
+            {/* Enlarged invisible/soft touch-friendly hit sphere */}
+            <mesh
+              renderOrder={998}
+              onPointerDown={(e) => {
+                e.stopPropagation();
+                const camDir = new Vector3();
+                camera.getWorldDirection(camDir);
+                const plane = new Plane().setFromNormalAndCoplanarPoint(
+                  camDir.negate(),
+                  new Vector3(...pos)
+                );
+                activeDragRef.current = { limb, plane };
+                setDraggingLimb(limb);
+                setIsDraggingGizmo(true);
+                setSelectedJoint(
+                  (limb.startsWith('arm_')
+                    ? `shoulder_${limb.endsWith('_L') ? 'L' : 'R'}`
+                    : `hip_${limb.endsWith('_L') ? 'L' : 'R'}`) as JointId
+                );
+              }}
+            >
+              <sphereGeometry args={[0.044 * scale, 14, 14]} />
+              <meshBasicMaterial
+                color={isActive ? '#f59e0b' : '#38bdf8'}
+                transparent
+                opacity={isActive ? 0.25 : 0.14}
+                depthTest={false}
+                depthWrite={false}
+              />
+            </mesh>
+            {/* Visible inner core */}
+            <mesh renderOrder={999}>
+              <sphereGeometry args={[0.022 * scale, 16, 16]} />
+              <meshStandardMaterial
+                color={isActive ? '#fbbf24' : '#38bdf8'}
+                emissive={isActive ? '#d97706' : '#0284c7'}
+                emissiveIntensity={isActive ? 1.1 : 0.75}
+                transparent
+                opacity={0.85}
+                depthTest={false}
+                depthWrite={false}
+              />
+            </mesh>
+          </group>
         );
       })}
     </group>

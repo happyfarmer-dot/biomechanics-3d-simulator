@@ -5,6 +5,8 @@ import {
   DEFAULT_HEIGHT_M,
   DEFAULT_MASS_KG,
   getJointSliderLimits,
+  JOINT_ORDER,
+  SKELETON_CONFIG,
 } from '../data/skeletonConfig';
 import { computeKinematics } from '../engine/kinematics';
 import { mapJointSoftTissueLoads } from '../engine/ligamentLoadMapper';
@@ -48,6 +50,7 @@ interface SimState {
   layers: LayerVisibility;
   isDraggingGizmo: boolean;
   useTouchPad: boolean;
+  autoBalanceStanding: boolean;
   showJointHandles: boolean;
   muscleEffectMode: 'anatomy' | 'strain';
   muscleStrainSubMode: 'geometric' | 'activeTension';
@@ -78,6 +81,7 @@ interface SimState {
   setIntegrityReport: (report: RigIntegrityReport | null) => void;
   setCameraVectors: (vecs: CameraVectors) => void;
   setUseTouchPad: (use: boolean) => void;
+  setAutoBalanceStanding: (enabled: boolean) => void;
   setShowJointHandles: (show: boolean) => void;
   setMuscleEffectMode: (mode: 'anatomy' | 'strain') => void;
   setMuscleStrainSubMode: (mode: 'geometric' | 'activeTension') => void;
@@ -150,6 +154,114 @@ function evaluateAll(
   return { kinematics, muscles, loads, alerts, jointRiskMap, focusedSoftTissues };
 }
 
+const NON_STANDING_PRESET_KEYWORDS = [
+  'seated',
+  'bench',
+  'plank',
+  'pushup',
+  'bridge',
+  'floor',
+  'cobra',
+  'superman',
+  'lying',
+  'preacher',
+  'dip',
+  'pull_up',
+  'chin_up',
+  'hanging',
+  'russian_twist',
+  'childs_pose',
+];
+
+function computeWholeBodyCoMZ(
+  pose: PoseMap,
+  heightM: number,
+  calibratedOffsets: Record<JointId, Vec3> | null,
+  activePresetId: string | null
+): number {
+  const kin = computeKinematics(pose, heightM, calibratedOffsets, activePresetId);
+  let sumMZ = 0;
+  let sumM = 0;
+  for (const id of JOINT_ORDER) {
+    const m = SKELETON_CONFIG[id].massRatio;
+    sumMZ += m * kin.joints[id].comWorldPosition[2];
+    sumM += m;
+  }
+  return sumM > 0 ? sumMZ / sumM : 0;
+}
+
+function applyStandingBalanceCompensation(
+  pose: PoseMap,
+  editedJoints: JointId[],
+  activePresetId: string | null,
+  calibratedOffsets: Record<JointId, Vec3> | null,
+  heightM: number
+): { pose: PoseMap; modifiedJoints: JointId[] } {
+  const isStanding =
+    Math.abs(pose.pelvis.flexion) < 60 &&
+    Math.abs(pose.pelvis.abduction) < 45 &&
+    !(activePresetId && NON_STANDING_PRESET_KEYWORDS.some((kw) => activePresetId.includes(kw)));
+  if (!isStanding) return { pose, modifiedJoints: [] };
+
+  const editedSet = new Set(editedJoints);
+  const next: PoseMap = { ...pose };
+  const modified: JointId[] = [];
+  const clampVal = (v: number, [min, max]: [number, number]) => Math.max(min, Math.min(max, v));
+  const round1 = (v: number) => Math.round(v * 10) / 10;
+
+  // 1. Flat-foot ankle pitch compensation when hip or knee changes
+  for (const side of ['L', 'R'] as const) {
+    const hipId = `hip_${side}` as JointId;
+    const kneeId = `knee_${side}` as JointId;
+    const ankleId = `ankle_${side}` as JointId;
+    if ((editedSet.has(hipId) || editedSet.has(kneeId)) && !editedSet.has(ankleId)) {
+      const limits = getJointSliderLimits(ankleId);
+      const targetFlex = clampVal(
+        round1(next[hipId].flexion - next[kneeId].flexion),
+        limits.flexion
+      );
+      if (Math.abs(targetFlex - next[ankleId].flexion) > 0.05) {
+        next[ankleId] = { ...next[ankleId], flexion: targetFlex };
+        modified.push(ankleId);
+      }
+    }
+  }
+
+  // 2. Bilateral midfoot CoM balance via subtle pelvis pitch compensation when leg joints change
+  const touchesLowerLimb =
+    editedSet.has('hip_L') ||
+    editedSet.has('hip_R') ||
+    editedSet.has('knee_L') ||
+    editedSet.has('knee_R');
+  const bilateralFeetPlanted =
+    Math.abs(next.hip_L.flexion - next.hip_R.flexion) < 15 &&
+    Math.abs(next.knee_L.flexion - next.knee_R.flexion) < 15;
+
+  const legBent =
+    Math.abs(next.hip_L.flexion) > 5 ||
+    Math.abs(next.hip_R.flexion) > 5 ||
+    Math.abs(next.knee_L.flexion) > 5 ||
+    Math.abs(next.knee_R.flexion) > 5;
+
+  if (touchesLowerLimb && legBent && !editedSet.has('pelvis') && bilateralFeetPlanted) {
+    const comZ = computeWholeBodyCoMZ(next, heightM, calibratedOffsets, activePresetId);
+    const targetZ = 0.035;
+    if (comZ < 0.005 || comZ > 0.075) {
+      const pelvisLimits = getJointSliderLimits('pelvis');
+      const minP = Math.max(pelvisLimits.flexion[0], -8);
+      const maxP = Math.min(pelvisLimits.flexion[1], 55);
+      const deltaP = (targetZ - comZ) / 0.0042;
+      const nextPelvisFlex = clampVal(round1(next.pelvis.flexion + deltaP), [minP, maxP]);
+      if (Math.abs(nextPelvisFlex - next.pelvis.flexion) > 0.05) {
+        next.pelvis = { ...next.pelvis, flexion: nextPelvisFlex };
+        modified.push('pelvis');
+      }
+    }
+  }
+
+  return { pose: next, modifiedJoints: modified };
+}
+
 const initialPose = createNeutralPose();
 const initialDerived = evaluateAll(
   initialPose,
@@ -187,6 +299,7 @@ export const useSimStore = create<SimState>((set, get) => ({
   },
   isDraggingGizmo: false,
   useTouchPad: true,
+  autoBalanceStanding: true,
   showJointHandles: false,
   muscleEffectMode: 'anatomy',
   muscleStrainSubMode: 'geometric',
@@ -212,6 +325,7 @@ export const useSimStore = create<SimState>((set, get) => ({
   setIntegrityReport: (integrityReport) => set({ integrityReport }),
   setCameraVectors: (cameraVectors) => set({ cameraVectors }),
   setUseTouchPad: (useTouchPad) => set({ useTouchPad }),
+  setAutoBalanceStanding: (autoBalanceStanding) => set({ autoBalanceStanding }),
   setShowJointHandles: (showJointHandles) => set({ showJointHandles }),
   setMuscleEffectMode: (muscleEffectMode) => set({ muscleEffectMode }),
   setMuscleStrainSubMode: (muscleStrainSubMode) => set({ muscleStrainSubMode }),
@@ -364,48 +478,21 @@ export const useSimStore = create<SimState>((set, get) => ({
       rotation: clampVal(patch.rotation ?? cur.rotation, limits.rotation),
     };
 
-    const nextPose: PoseMap = {
+    const rawNextPose: PoseMap = {
       ...s.pose,
       [jointId]: nextAngles,
     };
-    const derived = evaluateAll(
-      nextPose,
-      s.forces,
-      s.heightM,
-      s.bodyMassKg,
-      s.includeGravity,
-      s.focusedJointId,
-      s.selectedJoint,
-      s.calibratedOffsets,
-      s.dynamicLoadFactor,
-      s.sexProfile,
-      s.romToleranceBoost,
-      s.activePresetId
-    );
+    const balanced = s.autoBalanceStanding
+      ? applyStandingBalanceCompensation(
+          rawNextPose,
+          [jointId],
+          s.activePresetId,
+          s.calibratedOffsets,
+          s.heightM
+        )
+      : { pose: rawNextPose, modifiedJoints: [] as JointId[] };
+    const nextPose = balanced.pose;
 
-    if (s.activePresetId && s.trajectoryBasePose) {
-      const base = s.trajectoryBasePose[jointId];
-      const nextOffsets = {
-        ...s.trajectoryJointOffsets,
-        [jointId]: {
-          flexion: nextAngles.flexion - base.flexion,
-          abduction: nextAngles.abduction - base.abduction,
-          rotation: nextAngles.rotation - base.rotation,
-        },
-      };
-      set({
-        pose: nextPose,
-        trajectoryJointOffsets: nextOffsets,
-        ...derived,
-      });
-    } else {
-      set({ pose: nextPose, activePresetId: null, ...derived });
-    }
-  },
-
-  applyPosePatch: (patch) => {
-    const s = get();
-    const nextPose: PoseMap = { ...s.pose, ...patch };
     const derived = evaluateAll(
       nextPose,
       s.forces,
@@ -423,7 +510,60 @@ export const useSimStore = create<SimState>((set, get) => ({
 
     if (s.activePresetId && s.trajectoryBasePose) {
       const nextOffsets = { ...s.trajectoryJointOffsets };
-      for (const jId of Object.keys(patch) as JointId[]) {
+      for (const jId of [jointId, ...balanced.modifiedJoints]) {
+        const base = s.trajectoryBasePose[jId];
+        const nextVal = nextPose[jId];
+        if (base && nextVal) {
+          nextOffsets[jId] = {
+            flexion: nextVal.flexion - base.flexion,
+            abduction: nextVal.abduction - base.abduction,
+            rotation: nextVal.rotation - base.rotation,
+          };
+        }
+      }
+      set({
+        pose: nextPose,
+        trajectoryJointOffsets: nextOffsets,
+        ...derived,
+      });
+    } else {
+      set({ pose: nextPose, activePresetId: null, ...derived });
+    }
+  },
+
+  applyPosePatch: (patch) => {
+    const s = get();
+    const editedJoints = Object.keys(patch) as JointId[];
+    const rawNextPose: PoseMap = { ...s.pose, ...patch };
+    const balanced = s.autoBalanceStanding
+      ? applyStandingBalanceCompensation(
+          rawNextPose,
+          editedJoints,
+          s.activePresetId,
+          s.calibratedOffsets,
+          s.heightM
+        )
+      : { pose: rawNextPose, modifiedJoints: [] as JointId[] };
+    const nextPose = balanced.pose;
+
+    const derived = evaluateAll(
+      nextPose,
+      s.forces,
+      s.heightM,
+      s.bodyMassKg,
+      s.includeGravity,
+      s.focusedJointId,
+      s.selectedJoint,
+      s.calibratedOffsets,
+      s.dynamicLoadFactor,
+      s.sexProfile,
+      s.romToleranceBoost,
+      s.activePresetId
+    );
+
+    if (s.activePresetId && s.trajectoryBasePose) {
+      const nextOffsets = { ...s.trajectoryJointOffsets };
+      for (const jId of [...editedJoints, ...balanced.modifiedJoints]) {
         const nextVal = nextPose[jId];
         const base = s.trajectoryBasePose[jId];
         if (nextVal && base) {

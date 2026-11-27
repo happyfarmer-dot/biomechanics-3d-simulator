@@ -3,6 +3,7 @@ import { Canvas } from '@react-three/fiber';
 import { useRef, useState } from 'react';
 import { useSimStore } from '../../store/useSimStore';
 import { CameraRig } from './CameraRig';
+import { DirectLimbIK } from './DirectLimbIK';
 import { ExercisePropsOverlay } from './ExercisePropsOverlay';
 import { GlbAnatomyLoader } from './GlbAnatomyLoader';
 import { HumanRig } from './HumanRig';
@@ -127,6 +128,7 @@ export function SceneCanvas() {
 
         <JointMacroDetail />
         <SpatialForceEditor />
+        <DirectLimbIK />
         <JointGizmo />
 
         <CameraRig />
